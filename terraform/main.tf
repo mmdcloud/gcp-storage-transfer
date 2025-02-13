@@ -16,6 +16,7 @@ resource "google_storage_bucket" "source_bucket" {
   storage_class = "STANDARD"
   project       = var.project_id
   location      = "asia-south1"
+  force_destroy = true
 }
 
 resource "google_storage_bucket" "destination_bucket" {
@@ -23,6 +24,7 @@ resource "google_storage_bucket" "destination_bucket" {
   storage_class = "STANDARD"
   project       = var.project_id
   location      = "asia-south2"
+  force_destroy = true
 }
 
 resource "google_storage_bucket_object" "image1" {
@@ -77,11 +79,9 @@ resource "google_storage_transfer_job" "storage_transfer_service" {
     }
     gcs_data_source {
       bucket_name = google_storage_bucket.source_bucket.name
-      path        = "/"
     }
     gcs_data_sink {
       bucket_name = google_storage_bucket.destination_bucket.name
-      path        = "/"
     }
   }
 
