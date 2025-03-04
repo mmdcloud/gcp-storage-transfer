@@ -30,19 +30,19 @@ resource "google_storage_bucket" "destination_bucket" {
 resource "google_storage_bucket_object" "image1" {
   name   = "image-1.jpg"
   bucket = google_storage_bucket.source_bucket.name
-  source = "../image-1.jpg"
+  source = "../images/image-1.jpg"
 }
 
 resource "google_storage_bucket_object" "image2" {
   name   = "image-2.jpg"
   bucket = google_storage_bucket.source_bucket.name
-  source = "../image-2.jpg"
+  source = "../images/image-2.jpg"
 }
 
 resource "google_storage_bucket_object" "image3" {
   name   = "image-3.jpg"
   bucket = google_storage_bucket.source_bucket.name
-  source = "../image-3.jpg"
+  source = "../images/image-3.jpg"
 }
 
 resource "google_storage_bucket_iam_member" "source_bucket_iam" {
