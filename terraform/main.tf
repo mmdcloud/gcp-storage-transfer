@@ -100,5 +100,5 @@ module "storage_transfer_service" {
       schedule_repeat_interval = "3600s"
     }
   ]
-  depends_on = [ google_storage_bucket_iam_member.destination_bucket_iam,google_storage_bucket_iam_member.source_bucket_iam ]
+  depends_on = [google_storage_bucket_iam_member.destination_bucket_iam, google_storage_bucket_iam_member.source_bucket_iam,google_pubsub_topic_iam_member.notification_config]
 }
