@@ -2,11 +2,11 @@ terraform {
   required_providers {
     google = {
       source  = "hashicorp/google"
-      version = "6.23.0"
+      version = "~> 6.0"
     }
   }
 }
 
 provider "google" {
-  project = "nodal-talon-445602-m1"
+  project = "orbital-bee-455915-h5"
 }
