@@ -1,6 +1,6 @@
 variable "project_id" {
   type    = string
-  default = "nodal-talon-445602-m1"
+  default = "orbital-bee-455915-h5"
 }
 variable "source_bucket_location" {
   type    = string
