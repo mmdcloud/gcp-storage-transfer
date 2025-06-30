@@ -21,15 +21,15 @@ module "source_bucket" {
   objects = [
     {
       name   = "image-1.jpg",
-      source = "../images/image-1.jpg"
+      source = "../src/image-1.jpg"
     },
     {
       name   = "image-2.jpg",
-      source = "../images/image-2.jpg"
+      source = "../src/image-2.jpg"
     },
     {
       name   = "image-3.jpg",
-      source = "../images/image-3.jpg"
+      source = "../src/image-3.jpg"
     }
   ]
 }
