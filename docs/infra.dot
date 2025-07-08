@@ -1,0 +1,23 @@
+digraph INFRA {
+  node [ color = "black", fillcolor = "#E6E6E6", height =1, style = "filled,bold,rounded", fontname = "Arial" ];
+  "madmaxweb1" [ label = "madmaxweb1
+(google_storage_bucket)", shape =cylinder, fillcolor = "#FFF5CD" ];
+  "madmaxweb2" [ label = "madmaxweb2
+(google_storage_bucket)", shape =cylinder, fillcolor = "#FFF5CD" ];
+  "storage-transfer-topic" [ label = "storage-transfer-topic
+(google_pubsub_topic)", shape =rectangle, fillcolor = "#CCE0AC" ];
+  "storage_transfer_service" [ label = "storage_transfer_service
+(google_storage_transfer_job)", shape =rectangle ];
+  "image-1.jpg" [ label = "image-1.jpg
+(google_storage_bucket_object)", shape =cylinder, fillcolor = "#FFF5CD" ];
+  "image-2.jpg" [ label = "image-2.jpg
+(google_storage_bucket_object)", shape =cylinder, fillcolor = "#FFF5CD" ];
+  "image-3.jpg" [ label = "image-3.jpg
+(google_storage_bucket_object)", shape =cylinder, fillcolor = "#FFF5CD" ];
+  "storage_transfer_service" -> "madmaxweb1";
+  "storage_transfer_service" -> "madmaxweb2";
+  "storage_transfer_service" -> "storage-transfer-topic";
+  "image-1.jpg" -> "madmaxweb1";
+  "image-2.jpg" -> "madmaxweb1";
+  "image-3.jpg" -> "madmaxweb1";
+}

@@ -1,150 +1,180 @@
-# GCS Bucket-to-Bucket Transfer using Storage Transfer Service
+# Google Cloud Storage Transfer Service Automation with Terraform
 
-This repository provides Terraform code to automate file transfers between Google Cloud Storage buckets using the Storage Transfer Service.
+This project automates the setup of a Google Cloud Storage (GCS) transfer service that moves files between buckets on a scheduled basis with notification capabilities. It provides a complete infrastructure-as-code solution using Terraform to manage GCS buckets, Pub/Sub topics, and Storage Transfer Service configurations.
 
-## Overview
+The infrastructure setup includes automatic file transfer between two GCS buckets located in different regions, with configurable scheduling and notification systems. The solution implements best practices for GCP resource management and includes proper IAM configurations for secure operations. Key features include hourly scheduled transfers, success/failure notifications via Pub/Sub, and complete infrastructure automation using Terraform modules.
 
-Google Cloud Storage Transfer Service allows you to easily and securely transfer data between cloud storage systems. This implementation focuses specifically on transferring files from one GCS bucket to another, either within the same Google Cloud project or across different projects.
+## Repository Structure
+```
+terraform/
+├── main.tf                 # Main Terraform configuration file defining the core infrastructure
+├── provider.tf             # Google Cloud provider configuration
+├── variables.tf           # Global variable definitions
+└── modules/               # Reusable Terraform modules
+    ├── gcs/              # Google Cloud Storage bucket configuration module
+    ├── pubsub/           # Pub/Sub topic configuration module
+    └── storage-transfer/  # Storage Transfer Service configuration module
+```
 
-## Features
-
-- Automated one-time or recurring transfers between GCS buckets
-- Configurable transfer schedules
-- File filtering options based on prefixes and modification times
-- Support for deletion options (delete from source after transfer, delete destination files not in source)
-- Detailed transfer job status and history
-- IAM permissions management for secure transfers
-
-## Prerequisites
-
+## Usage Instructions
+### Prerequisites
 - Google Cloud Platform account with billing enabled
-- `roles/storagetransfer.admin` and `roles/storage.admin` permissions
-- Terraform v1.0.0+
-- Google Cloud SDK (optional, for CLI operations)
+- Terraform v1.0.0 or later
+- Google Cloud SDK installed and configured
+- Required GCP APIs enabled:
+  - Cloud Storage
+  - Cloud Storage Transfer Service
+  - Cloud Pub/Sub
 
-## Setup
+### Installation
 
-1. Clone this repository:
-   ```
-   git clone https://github.com/yourusername/gcs-bucket-transfer.git
-   cd gcs-bucket-transfer
-   ```
-
-2. Update the `terraform.tfvars` file with your configuration details:
-   ```hcl
-   project_id          = "your-project-id"
-   source_bucket       = "source-bucket-name"
-   destination_bucket  = "destination-bucket-name"
-   transfer_schedule   = "every 24 hours"  # Optional, for recurring transfers
-   ```
-
-3. Initialize and apply the Terraform configuration:
-   ```
-   terraform init
-   terraform apply
-   ```
-
-## Configuration Options
-
-### Basic Configuration
-
-```hcl
-module "storage_transfer" {
-  source            = "./modules/storage-transfer"
-  project_id        = var.project_id
-  source_bucket     = var.source_bucket
-  destination_bucket = var.destination_bucket
-  description       = "Daily backup transfer"
-}
+1. Clone the repository and navigate to the terraform directory:
+```bash
+cd terraform
 ```
 
-### Advanced Configuration with Schedule
+2. Initialize Terraform:
+```bash
+terraform init
+```
 
+3. Configure your GCP project ID in `provider.tf` or via environment variable:
+```bash
+export GOOGLE_PROJECT="your-project-id"
+```
+
+### Quick Start
+
+1. Review and modify variables in `variables.tf` if needed:
 ```hcl
-module "storage_transfer" {
-  source            = "./modules/storage-transfer"
-  project_id        = var.project_id
-  source_bucket     = var.source_bucket
-  destination_bucket = var.destination_bucket
-  description       = "Weekly transfer with prefix filtering"
-  
-  # Only transfer files within this prefix
-  prefix            = "data/"
-  
-  # Schedule transfer every Sunday at 2 AM
-  schedule = {
-    schedule_start_date = {
-      year  = 2025
-      month = 4
-      day   = 20
-    }
-    schedule_end_date = {
-      year  = 2026
-      month = 4
-      day   = 20
-    }
-    start_time_of_day = {
-      hours   = 2
-      minutes = 0
-      seconds = 0
-      nanos   = 0
-    }
-    repeat_interval = "604800s"  # 7 days in seconds
+project_id = "your-project-id"
+source_bucket_location = "asia-south1"
+destination_bucket_location = "asia-south2"
+```
+
+2. Plan the deployment:
+```bash
+terraform plan
+```
+
+3. Apply the configuration:
+```bash
+terraform apply
+```
+
+### More Detailed Examples
+
+1. Customizing the transfer schedule:
+```hcl
+schedule = [
+  {
+    start_year = 2024
+    start_month = 1
+    start_day = 1
+    end_year = 2024
+    end_month = 12
+    end_day = 31
+    hours = 0
+    minutes = 0
+    seconds = 0
+    nanos = 0
+    schedule_repeat_interval = "3600s"
   }
-  
-  # Delete source files after transfer
-  delete_objects_from_source_after_transfer = true
-}
+]
 ```
 
-## Core Terraform Resources
-
-The implementation uses the following key resources:
-
-- `google_storage_transfer_job`: Defines the transfer job configuration
-- `google_project_iam_member`: Manages IAM permissions for the transfer service account
-- `google_storage_bucket_iam_member`: Sets bucket-level permissions
-
-## Terraform Module Structure
-
-```
-.
-├── main.tf           # Main Terraform configuration
-├── variables.tf      # Input variables
-├── outputs.tf        # Output values
-├── modules/
-│   └── storage-transfer/
-│       ├── main.tf
-│       ├── variables.tf
-│       └── outputs.tf
-└── examples/
-    ├── simple-transfer/
-    └── scheduled-transfer/
+2. Configuring Pub/Sub notifications:
+```hcl
+notification_config = [
+  {
+    pubsub_topic = module.topic.id
+    event_types = [
+      "TRANSFER_OPERATION_SUCCESS",
+      "TRANSFER_OPERATION_FAILED"
+    ]
+    payload_format = "JSON"
+  }
+]
 ```
 
-## Monitoring Transfers
-
-After deployment, you can monitor transfer jobs through:
-
-1. Google Cloud Console: Navigate to "Storage Transfer Service" section
-2. CLI: 
-   ```
-   gcloud transfer jobs list
-   gcloud transfer jobs describe JOB_NAME
-   ```
-
-## Troubleshooting
+### Troubleshooting
 
 Common issues and solutions:
 
-- **Permission errors**: Ensure the Storage Transfer Service account has proper IAM permissions on both buckets
-- **Failed transfers**: Check logs in Cloud Logging with filter `resource.type="storage_transfer_job"`
-- **Scheduling issues**: Verify time zone settings and correct schedule format
+1. IAM Permission Issues
+- Error: "Permission denied for Storage Transfer Service"
+- Solution: Ensure the Storage Transfer Service account has the required IAM roles:
+```bash
+gcloud projects add-iam-policy-binding PROJECT_ID \
+    --member serviceAccount:PROJECT_NUMBER@storage-transfer-service.iam.gserviceaccount.com \
+    --role roles/storage.admin
+```
 
-## Contributing
+2. Bucket Access Issues
+- Error: "Access denied to source/destination bucket"
+- Solution: Verify bucket IAM permissions and bucket names in the configuration
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+3. Transfer Job Scheduling Issues
+- Error: "Invalid schedule configuration"
+- Solution: Ensure schedule times are in the future and properly formatted
 
-## License
+## Data Flow
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+The system transfers files from a source GCS bucket to a destination bucket on a scheduled basis, with status notifications sent to a Pub/Sub topic.
+
+```ascii
+Source Bucket (asia-south1)
+        |
+        v
+Storage Transfer Service
+        |
+        v
+Destination Bucket (asia-south2)
+        |
+        v
+Pub/Sub Notifications
+```
+
+Component interactions:
+1. Storage Transfer Service authenticates using service account credentials
+2. Source bucket contents are read and compared with destination
+3. Files are transferred according to the configured schedule
+4. Transfer status notifications are published to Pub/Sub topic
+5. IAM roles control access between components
+
+## Infrastructure
+
+![Infrastructure diagram](./docs/infra.svg)
+
+### Storage
+- Source Bucket: `madmaxweb1` (Standard storage class, asia-south1)
+- Destination Bucket: `madmaxweb2` (Standard storage class, asia-south2)
+
+### Pub/Sub
+- Topic: Configured for transfer notifications
+- IAM: Publisher role granted to Storage Transfer Service
+
+### Storage Transfer Service
+- Schedule: Hourly transfers
+- Notifications: Success and failure events
+- IAM: Storage admin role on both buckets
+
+## Deployment
+
+1. Prerequisites:
+- Enable required GCP APIs
+- Configure GCP credentials
+
+2. Deployment steps:
+```bash
+terraform init
+terraform plan
+terraform apply
+```
+
+3. Verify deployment:
+```bash
+gcloud storage buckets list
+gcloud pubsub topics list
+gcloud transfer jobs list
+```
