@@ -7,11 +7,16 @@ locals {
   minute            = formatdate("mm", local.current_timestamp)
 }
 
+# -------------------------------------------------------------------------------
+# Storage transfer service account
+# -------------------------------------------------------------------------------
 data "google_storage_transfer_project_service_account" "default" {
   project = var.project_id
 }
 
-# Creating soource and destination buckets
+# -------------------------------------------------------------------------------
+# Cloud storage buckets
+# -------------------------------------------------------------------------------
 module "source_bucket" {
   source        = "./modules/gcs"
   bucket_name   = "madmaxweb1"
@@ -42,6 +47,9 @@ module "destination_bucket" {
   force_destroy = true
 }
 
+# -------------------------------------------------------------------------------
+# Cloud storage iam bindings
+# -------------------------------------------------------------------------------
 resource "google_storage_bucket_iam_member" "source_bucket_iam" {
   bucket     = module.source_bucket.name
   role       = "roles/storage.admin"
@@ -56,6 +64,10 @@ resource "google_storage_bucket_iam_member" "destination_bucket_iam" {
   depends_on = [module.destination_bucket]
 }
 
+
+# -------------------------------------------------------------------------------
+# PubSub configuration
+# -------------------------------------------------------------------------------
 module "topic" {
   source     = "./modules/pubsub"
   topic_name = var.pubsub_topic_name
@@ -67,7 +79,9 @@ resource "google_pubsub_topic_iam_member" "notification_config" {
   member = "serviceAccount:${data.google_storage_transfer_project_service_account.default.email}"
 }
 
+# -------------------------------------------------------------------------------
 # Storage Transfer Job module
+# -------------------------------------------------------------------------------
 module "storage_transfer_service" {
   source                        = "./modules/storage-transfer"
   description                   = "Storage Transfer Service"
