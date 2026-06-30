@@ -1,13 +1,24 @@
 locals {
   current_timestamp = timestamp()
-  year              = formatdate("YYYY", local.current_timestamp)
-  month             = formatdate("MM", local.current_timestamp)
-  day               = formatdate("DD", local.current_timestamp)
+  start_year        = formatdate("YYYY", local.current_timestamp)
+  start_month       = formatdate("MM", local.current_timestamp)
+  start_day         = formatdate("DD", local.current_timestamp)
   hour              = formatdate("HH", local.current_timestamp)
   minute            = formatdate("mm", local.current_timestamp)
+
+  # Add 24h as an actual duration, then derive the end date from the result
+  end_timestamp = timeadd(local.current_timestamp, "24h")
+  end_year      = formatdate("YYYY", local.end_timestamp)
+  end_month     = formatdate("MM", local.end_timestamp)
+  end_day       = formatdate("DD", local.end_timestamp)
+
+  # Same issue applies to minutes - add as a duration too
+  start_timestamp_plus_2m = timeadd(local.current_timestamp, "2m")
+  schedule_minute         = formatdate("mm", local.start_timestamp_plus_2m)
+  schedule_hour           = formatdate("HH", local.start_timestamp_plus_2m)
 }
 
-# -------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
 # Storage transfer service account
 # -------------------------------------------------------------------------------
 data "google_storage_transfer_project_service_account" "default" {
@@ -101,14 +112,14 @@ module "storage_transfer_service" {
 
   schedule = [
     {
-      start_year               = local.year
-      start_month              = local.month
-      start_day                = local.day
-      end_year                 = local.year
-      end_month                = local.month
-      end_day                  = local.day + 1
-      hours                    = local.hour
-      minutes                  = local.minute + 2
+      start_year               = local.start_year
+      start_month              = local.start_month
+      start_day                = local.start_day
+      end_year                 = local.end_year
+      end_month                = local.end_month
+      end_day                  = local.end_day
+      hours                    = local.schedule_hour
+      minutes                  = local.schedule_minute
       seconds                  = 0
       nanos                    = 0
       schedule_repeat_interval = "3600s"
