@@ -18,7 +18,7 @@ locals {
   schedule_hour           = formatdate("HH", local.start_timestamp_plus_2m)
 }
 
-# ------------------------------------------------------------------------------
+# -------------------------------------------------------------------------------
 # Storage transfer service account
 # -------------------------------------------------------------------------------
 data "google_storage_transfer_project_service_account" "default" {
@@ -74,7 +74,6 @@ resource "google_storage_bucket_iam_member" "destination_bucket_iam" {
   member     = "serviceAccount:${data.google_storage_transfer_project_service_account.default.email}"
   depends_on = [module.destination_bucket]
 }
-
 
 # -------------------------------------------------------------------------------
 # PubSub configuration
