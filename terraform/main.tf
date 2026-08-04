@@ -30,7 +30,7 @@ data "google_storage_transfer_project_service_account" "default" {
 # -------------------------------------------------------------------------------
 module "source_bucket" {
   source        = "./modules/gcs"
-  bucket_name   = "madmaxweb1"
+  bucket_name   = "source-bucket-${var.project_id}"
   storage_class = "STANDARD"
   location      = "asia-south1"
   force_destroy = true
@@ -52,7 +52,7 @@ module "source_bucket" {
 
 module "destination_bucket" {
   source        = "./modules/gcs"
-  bucket_name   = "madmaxweb2"
+  bucket_name   = "destination-bucket-${var.project_id}"
   storage_class = "STANDARD"
   location      = "asia-south2"
   force_destroy = true
@@ -61,16 +61,23 @@ module "destination_bucket" {
 # -------------------------------------------------------------------------------
 # Cloud storage iam bindings
 # -------------------------------------------------------------------------------
-resource "google_storage_bucket_iam_member" "source_bucket_iam" {
+resource "google_storage_bucket_iam_member" "source_bucket_object_viewer" {
   bucket     = module.source_bucket.name
-  role       = "roles/storage.admin"
+  role       = "roles/storage.objectViewer"
   member     = "serviceAccount:${data.google_storage_transfer_project_service_account.default.email}"
   depends_on = [module.source_bucket]
 }
 
-resource "google_storage_bucket_iam_member" "destination_bucket_iam" {
+resource "google_storage_bucket_iam_member" "source_bucket_legacy_reader" {
+  bucket     = module.source_bucket.name
+  role       = "roles/storage.legacyBucketReader"
+  member     = "serviceAccount:${data.google_storage_transfer_project_service_account.default.email}"
+  depends_on = [module.source_bucket]
+}
+
+resource "google_storage_bucket_iam_member" "destination_bucket_legacy_writer" {
   bucket     = module.destination_bucket.name
-  role       = "roles/storage.admin"
+  role       = "roles/storage.legacyBucketWriter"
   member     = "serviceAccount:${data.google_storage_transfer_project_service_account.default.email}"
   depends_on = [module.destination_bucket]
 }
@@ -124,5 +131,10 @@ module "storage_transfer_service" {
       schedule_repeat_interval = "3600s"
     }
   ]
-  depends_on = [google_storage_bucket_iam_member.destination_bucket_iam, google_storage_bucket_iam_member.source_bucket_iam, google_pubsub_topic_iam_member.notification_config]
+  depends_on = [
+    google_storage_bucket_iam_member.source_bucket_object_viewer,
+    google_storage_bucket_iam_member.source_bucket_legacy_reader,
+    google_storage_bucket_iam_member.destination_bucket_legacy_writer,
+    google_pubsub_topic_iam_member.notification_config
+  ]
 }
