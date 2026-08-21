@@ -30,53 +30,73 @@ data "google_storage_transfer_project_service_account" "default" {
 # -------------------------------------------------------------------------------
 module "source_bucket" {
   source        = "./modules/gcs"
-  bucket_name   = "source-bucket-${var.project_id}"
+  name          = "source-bucket-${var.project_id}"
   storage_class = "STANDARD"
   location      = "asia-south1"
   force_destroy = true
-  objects = [
+  cors = [
     {
-      name   = "image-1.jpg",
-      source = "../src/image-1.jpg"
+      origin          = ["*"]
+      max_age_seconds = 3600
+      method          = ["GET"]
+      response_header = ["*"]
+    }
+  ]
+  contents = [
+    {
+      name        = "image-1.jpg",
+      content     = ""
+      source_path = "../src/image-1.jpg"
     },
     {
-      name   = "image-2.jpg",
-      source = "../src/image-2.jpg"
+      name        = "image-2.jpg",
+      content     = ""
+      source_path = "../src/image-2.jpg"
     },
     {
-      name   = "image-3.jpg",
-      source = "../src/image-3.jpg"
+      name        = "image-3.jpg",
+      content     = ""
+      source_path = "../src/image-3.jpg"
     }
   ]
 }
 
 module "destination_bucket" {
   source        = "./modules/gcs"
-  bucket_name   = "destination-bucket-${var.project_id}"
+  name          = "destination-bucket-${var.project_id}"
   storage_class = "STANDARD"
   location      = "asia-south2"
   force_destroy = true
+  cors = [
+    {
+      origin          = ["*"]
+      max_age_seconds = 3600
+      method          = ["PUT"]
+      response_header = ["*"]
+    }
+  ]
+  contents = []
 }
 
 # -------------------------------------------------------------------------------
 # Cloud storage iam bindings
 # -------------------------------------------------------------------------------
 resource "google_storage_bucket_iam_member" "source_bucket_object_viewer" {
-  bucket     = module.source_bucket.name
+  bucket     = module.source_bucket.bucket_name
   role       = "roles/storage.objectViewer"
   member     = "serviceAccount:${data.google_storage_transfer_project_service_account.default.email}"
   depends_on = [module.source_bucket]
 }
 
 resource "google_storage_bucket_iam_member" "source_bucket_legacy_reader" {
-  bucket     = module.source_bucket.name
+  bucket     = module.source_bucket.bucket_name
   role       = "roles/storage.legacyBucketReader"
   member     = "serviceAccount:${data.google_storage_transfer_project_service_account.default.email}"
   depends_on = [module.source_bucket]
 }
 
 resource "google_storage_bucket_iam_member" "destination_bucket_legacy_writer" {
-  bucket     = module.destination_bucket.name
+  bucket     = module.destination_bucket.bucket_name
   role       = "roles/storage.legacyBucketWriter"
   member     = "serviceAccount:${data.google_storage_transfer_project_service_account.default.email}"
   depends_on = [module.destination_bucket]
@@ -113,8 +133,8 @@ module "storage_transfer_service" {
       payload_format = "JSON"
     }
   ]
-  source_bucket_name = module.source_bucket.name
-  dest_bucket_name   = module.destination_bucket.name
+  source_bucket_name = module.source_bucket.bucket_name
+  dest_bucket_name   = module.destination_bucket.bucket_name
 
   schedule = [
     {
