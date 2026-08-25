@@ -30,6 +30,8 @@ variable "force_destroy" {}
 variable "notifications" {
   type = list(object({
     topic_id = string
+    payload_format = string
+    event_types = list(string)
   }))
   default = []
 }

@@ -5,7 +5,7 @@ resource "google_storage_bucket" "bucket" {
   versioning {
     enabled = var.versioning
   }
-  storage_class = var.storage_class
+  storage_class               = var.storage_class
   uniform_bucket_level_access = var.uniform_bucket_level_access
   dynamic "cors" {
     for_each = var.cors
@@ -44,6 +44,7 @@ resource "google_storage_bucket_object" "bucket_object" {
 resource "google_storage_notification" "notification" {
   count          = length(var.notifications)
   bucket         = google_storage_bucket.bucket.name
-  payload_format = "JSON_API_V1"
+  event_types    = var.notifications[count.index].event_types
+  payload_format = var.notifications[count.index].payload_format
   topic          = var.notifications[count.index].topic_id
 }

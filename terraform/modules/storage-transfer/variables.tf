@@ -11,10 +11,6 @@ variable "service_account" {
   type    = string
   default = null
 }
-variable "deletion_policy" {
-  type    = string
-  default = "DELETE"
-}
 variable "status" {
   type    = string
   default = "ENABLED"
@@ -41,6 +37,7 @@ variable "schedule" {
 
     schedule_repeat_interval = string
   }))
+  default = []
 }
 
 variable "event_stream" {

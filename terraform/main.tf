@@ -197,3 +197,153 @@ module "storage_transfer_service" {
 #   event_stream         = []  # must stay empty with replication_spec
 #   notification_config  = []
 # }
+
+# -------------------------------------------------------------------------------
+# Event stream usage 
+# -------------------------------------------------------------------------------
+# data "google_storage_project_service_account" "gcs_sa" {}
+
+# resource "google_pubsub_topic" "gcs_updates" {
+#   name = "gcs-source-bucket-updates"
+# }
+
+# # Pull subscription consumed by the Storage Transfer Service
+# resource "google_pubsub_subscription" "transfer_sub" {
+#   name  = "gcs-transfer-subscription"
+#   topic = google_pubsub_topic.gcs_updates.id
+
+#   # Retain unacknowledged messages for 7 days
+#   message_retention_duration = "604800s"
+#   retain_acked_messages      = false
+#   ack_deadline_seconds       = 30
+# }
+
+# module "source_bucket" {
+#   source        = "./modules/gcs"
+#   name          = "source-bucket-${var.project_id}"
+#   storage_class = "STANDARD"
+#   location      = "asia-south1"
+#   force_destroy = true
+#   cors = [
+#     {
+#       origin          = ["*"]
+#       max_age_seconds = 3600
+#       method          = ["GET"]
+#       response_header = ["*"]
+#     }
+#   ]
+#   contents = [
+#     {
+#       name        = "image-1.jpg",
+#       content     = ""
+#       source_path = "../src/image-1.jpg"
+#     },
+#     {
+#       name        = "image-2.jpg",
+#       content     = ""
+#       source_path = "../src/image-2.jpg"
+#     },
+#     {
+#       name        = "image-3.jpg",
+#       content     = ""
+#       source_path = "../src/image-3.jpg"
+#     }
+#   ]
+#   notifications = [
+#     {
+#       event_types    = ["OBJECT_FINALIZE"]
+#       payload_format = "JSON_API_V1"
+#       topic_id       = google_pubsub_topic.gcs_updates.id
+#     }
+#   ]
+# }
+
+# module "destination_bucket" {
+#   source        = "./modules/gcs"
+#   name          = "destination-bucket-${var.project_id}"
+#   storage_class = "STANDARD"
+#   location      = "asia-south2"
+#   force_destroy = true
+#   cors = [
+#     {
+#       origin          = ["*"]
+#       max_age_seconds = 3600
+#       method          = ["PUT"]
+#       response_header = ["*"]
+#     }
+#   ]
+#   contents = []
+# }
+
+# resource "google_pubsub_topic_iam_member" "gcs_publisher" {
+#   topic  = google_pubsub_topic.gcs_updates.name
+#   role   = "roles/pubsub.publisher"
+#   member = "serviceAccount:${data.google_storage_project_service_account.gcs_sa.email_address}"
+# }
+
+# resource "google_pubsub_subscription_iam_member" "transfer_subscriber" {
+#   subscription = google_pubsub_subscription.transfer_sub.name
+#   role         = "roles/pubsub.subscriber"
+#   member       = "serviceAccount:${data.google_storage_transfer_project_service_account.default.email}"
+# }
+
+# # Grant Transfer SA read access to the Source Bucket
+# resource "google_storage_bucket_iam_member" "source_viewer" {
+#   bucket = google_storage_bucket.source.name
+#   role   = "roles/storage.objectViewer"
+#   member = "serviceAccount:${data.google_storage_transfer_project_service_account.default.email}"
+# }
+
+# resource "google_storage_bucket_iam_member" "source_legacy_bucket_reader" {
+#   bucket = google_storage_bucket.source.name
+#   role   = "roles/storage.legacyBucketReader"
+#   member = "serviceAccount:${data.google_storage_transfer_project_service_account.default.email}"
+# }
+
+# # Grant Transfer SA write access to Destination Bucket
+# resource "google_storage_bucket_iam_member" "destination_writer" {
+#   bucket = google_storage_bucket.destination.name
+#   role   = "roles/storage.objectAdmin"
+#   member = "serviceAccount:${data.google_storage_transfer_project_service_account.default.email}"
+# }
+
+# module "storage_transfer_service" {
+#   source      = "./modules/storage-transfer"
+#   name        = "transferJobs/storagetransfer"
+#   description = "Storage Transfer Service"
+
+#   transfer_spec = {
+#     gcs_data_sink = {
+#       bucket_name = module.destination_bucket.bucket_name
+#     }
+#     gcs_data_source = {
+#       bucket_name = module.source_bucket.bucket_name
+#     }
+#     transfer_options = {
+#       delete_objects_unique_in_sink = false
+#     }
+#   }
+
+#   event_stream = [
+#     {
+#       name = google_pubsub_subscription.transfer_sub.id
+#     }
+#   ]
+
+#   notification_config = [
+#     {
+#       pubsub_topic = module.topic.id
+#       event_types = [
+#         "TRANSFER_OPERATION_SUCCESS",
+#         "TRANSFER_OPERATION_FAILED"
+#       ]
+#       payload_format = "JSON"
+#     }
+#   ]
+
+#   depends_on = [
+#     google_pubsub_subscription_iam_member.transfer_subscriber,
+#     google_storage_bucket_iam_member.source_viewer,
+#     google_storage_bucket_iam_member.destination_writer
+#   ]
+# }

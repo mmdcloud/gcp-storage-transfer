@@ -195,7 +195,7 @@ resource "google_storage_transfer_job" "storage_transfer_service" {
       repeat_interval = schedule.value["schedule_repeat_interval"]
     }
   }
-
+  
   dynamic "event_stream" {
     for_each = length(var.schedule) == 0 && length(var.event_stream) > 0 ? var.event_stream : []
     content {
