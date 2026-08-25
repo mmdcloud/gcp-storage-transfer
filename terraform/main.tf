@@ -120,21 +120,21 @@ resource "google_pubsub_topic_iam_member" "notification_config" {
 # Storage Transfer Job module
 # -------------------------------------------------------------------------------
 module "storage_transfer_service" {
-  source                        = "./modules/storage-transfer"
-  description                   = "Storage Transfer Service"
-  delete_objects_unique_in_sink = false
-  notification_config = [
-    {
-      pubsub_topic = module.topic.id
-      event_types = [
-        "TRANSFER_OPERATION_SUCCESS",
-        "TRANSFER_OPERATION_FAILED"
-      ]
-      payload_format = "JSON"
+  source      = "./modules/storage-transfer"
+  name        = "transferJobs/storagetransfer"
+  description = "Storage Transfer Service"
+
+  transfer_spec = {
+    gcs_data_sink = {
+      bucket_name = module.destination_bucket.bucket_name
     }
-  ]
-  source_bucket_name = module.source_bucket.bucket_name
-  dest_bucket_name   = module.destination_bucket.bucket_name
+    gcs_data_source = {
+      bucket_name = module.source_bucket.bucket_name
+    }
+    transfer_options = {
+      delete_objects_unique_in_sink = false
+    }
+  }
 
   schedule = [
     {
@@ -151,6 +151,18 @@ module "storage_transfer_service" {
       schedule_repeat_interval = "3600s"
     }
   ]
+
+  notification_config = [
+    {
+      pubsub_topic = module.topic.id
+      event_types = [
+        "TRANSFER_OPERATION_SUCCESS",
+        "TRANSFER_OPERATION_FAILED"
+      ]
+      payload_format = "JSON"
+    }
+  ]
+
   depends_on = [
     google_storage_bucket_iam_member.source_bucket_object_viewer,
     google_storage_bucket_iam_member.source_bucket_legacy_reader,
@@ -158,3 +170,30 @@ module "storage_transfer_service" {
     google_pubsub_topic_iam_member.notification_config
   ]
 }
+
+# -------------------------------------------------------------------------------
+# Replication module usage 
+# -------------------------------------------------------------------------------
+# module "gcs_replication" {
+#   source           = "./modules/storage-transfer"
+#   name             = null
+#   description      = "Continuous replication from raw to processed bucket"
+#   deletion_policy  = "DELETE"
+#   status           = "ENABLED"
+#   service_account  = var.service_account
+#   source_bucket_name = null   # not used, must be null so transfer_spec doesn't fire
+#   dest_bucket_name   = null
+
+#   replication_spec = [{
+#     source_bucket_name = "raw-data-bucket"
+#     sink_bucket_name    = "processed-data-bucket"
+#     sink_path           = "incoming/"
+#     transfer_options = {
+#       overwrite_objects_already_existing_in_sink = true
+#     }
+#   }]
+
+#   schedule             = []  # must stay empty with replication_spec
+#   event_stream         = []  # must stay empty with replication_spec
+#   notification_config  = []
+# }
