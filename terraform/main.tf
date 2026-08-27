@@ -25,6 +25,10 @@ data "google_storage_transfer_project_service_account" "default" {
   project = var.project_id
 }
 
+resource "random_id" "id" {
+  byte_length = 8
+}
+
 # -------------------------------------------------------------------------------
 # Cloud storage buckets
 # -------------------------------------------------------------------------------
@@ -275,6 +279,17 @@ module "storage_transfer_service" {
 #   contents = []
 # }
 
+# module "notification_topic" {
+#   source     = "./modules/pubsub"
+#   topic_name = var.pubsub_topic_name
+# }
+
+# resource "google_pubsub_topic_iam_member" "notification_config" {
+#   topic  = module.notification_topic.id
+#   role   = "roles/pubsub.publisher"
+#   member = "serviceAccount:${data.google_storage_transfer_project_service_account.default.email}"
+# }
+
 # resource "google_pubsub_topic_iam_member" "gcs_publisher" {
 #   topic  = google_pubsub_topic.gcs_updates.name
 #   role   = "roles/pubsub.publisher"
@@ -289,27 +304,33 @@ module "storage_transfer_service" {
 
 # # Grant Transfer SA read access to the Source Bucket
 # resource "google_storage_bucket_iam_member" "source_viewer" {
-#   bucket = google_storage_bucket.source.name
+#   bucket = module.source_bucket.bucket_name
 #   role   = "roles/storage.objectViewer"
 #   member = "serviceAccount:${data.google_storage_transfer_project_service_account.default.email}"
 # }
 
 # resource "google_storage_bucket_iam_member" "source_legacy_bucket_reader" {
-#   bucket = google_storage_bucket.source.name
+#   bucket = module.source_bucket.bucket_name
 #   role   = "roles/storage.legacyBucketReader"
 #   member = "serviceAccount:${data.google_storage_transfer_project_service_account.default.email}"
 # }
 
 # # Grant Transfer SA write access to Destination Bucket
 # resource "google_storage_bucket_iam_member" "destination_writer" {
-#   bucket = google_storage_bucket.destination.name
+#   bucket = module.destination_bucket.bucket_name
 #   role   = "roles/storage.objectAdmin"
+#   member = "serviceAccount:${data.google_storage_transfer_project_service_account.default.email}"
+# }
+
+# resource "google_storage_bucket_iam_member" "destination_bucket_legacy_writer" {
+#   bucket = module.destination_bucket.bucket_name
+#   role   = "roles/storage.legacyBucketWriter"
 #   member = "serviceAccount:${data.google_storage_transfer_project_service_account.default.email}"
 # }
 
 # module "storage_transfer_service" {
 #   source      = "./modules/storage-transfer"
-#   name        = "transferJobs/storagetransfer"
+#   name        = "transferJobs/storagetransfer-${random_id.id.hex}"
 #   description = "Storage Transfer Service"
 
 #   transfer_spec = {
@@ -332,7 +353,7 @@ module "storage_transfer_service" {
 
 #   notification_config = [
 #     {
-#       pubsub_topic = module.topic.id
+#       pubsub_topic = module.notification_topic.id
 #       event_types = [
 #         "TRANSFER_OPERATION_SUCCESS",
 #         "TRANSFER_OPERATION_FAILED"
