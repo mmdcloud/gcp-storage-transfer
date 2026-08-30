@@ -7,10 +7,6 @@ variable "notification_config" {
   }))
   default = null
 }
-variable "service_account" {
-  type    = string
-  default = null
-}
 variable "status" {
   type    = string
   default = "ENABLED"

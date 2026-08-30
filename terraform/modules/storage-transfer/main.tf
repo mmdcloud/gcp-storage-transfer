@@ -1,7 +1,7 @@
 resource "google_storage_transfer_job" "storage_transfer_service" {
-  name        = var.name
-  description = var.description
-  status      = var.status
+  name            = var.name
+  description     = var.description
+  status          = var.status
 
   dynamic "transfer_spec" {
     for_each = var.transfer_spec != null && length(var.replication_spec) == 0 ? [var.transfer_spec] : []
@@ -195,7 +195,7 @@ resource "google_storage_transfer_job" "storage_transfer_service" {
       repeat_interval = schedule.value["schedule_repeat_interval"]
     }
   }
-  
+
   dynamic "event_stream" {
     for_each = length(var.schedule) == 0 && length(var.event_stream) > 0 ? var.event_stream : []
     content {
