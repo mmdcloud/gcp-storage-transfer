@@ -37,18 +37,28 @@ resource "random_id" "id" {
 # -------------------------------------------------------------------------------
 # Core Infrastructure: Storage Buckets & Event Streams
 # -------------------------------------------------------------------------------
-resource "google_pubsub_topic" "gcs_updates" {
-  name    = var.gcs_updates_topic_name
-  project = var.project_id
-}
-
-resource "google_pubsub_subscription" "transfer_sub" {
-  name                       = var.transfer_subscription_name
-  topic                      = google_pubsub_topic.gcs_updates.id
-  message_retention_duration = var.subscription_message_retention
-  retain_acked_messages      = false
-  ack_deadline_seconds       = var.subscription_ack_deadline
-  project                    = var.project_id
+module "gcs_updates" {
+  source        = "./modules/pubsub"
+  topic_name    = var.gcs_updates_topic_name
+  enable_schema = false
+  topic_iam = {
+    bindings = {
+      "roles/pubsub.publisher" = ["serviceAccount:${data.google_storage_project_service_account.gcs_sa.email_address}"]
+    }
+  }
+  subscriptions = {
+    gcs_transfer_subscription = {
+      subscription_name = var.transfer_subscription_name
+      iam = {
+        bindings = {
+          "roles/pubsub.subscriber" = ["serviceAccount:${data.google_storage_transfer_project_service_account.default.email}"]
+        }
+      }
+      message_retention_duration = var.subscription_message_retention
+      retain_acked_messages      = false
+      ack_deadline_seconds       = var.subscription_ack_deadline
+    }
+  }
 }
 
 module "source_bucket" {
@@ -70,7 +80,7 @@ module "source_bucket" {
     {
       event_types    = ["OBJECT_FINALIZE"]
       payload_format = "JSON_API_V1"
-      topic_id       = google_pubsub_topic.gcs_updates.id
+      topic_id       = module.gcs_updates.topic_id
     }
   ]
 }
@@ -94,8 +104,9 @@ module "destination_bucket" {
 
 # Notification Pub/Sub Topic for STS status alerts
 module "notification_topic" {
-  source     = "./modules/pubsub"
-  topic_name = var.pubsub_topic_name
+  source        = "./modules/pubsub"
+  topic_name    = var.pubsub_topic_name
+  enable_schema = false
 }
 
 # -------------------------------------------------------------------------------
@@ -152,22 +163,22 @@ resource "google_project_iam_member" "gcs_pubsub_publisher" {
 }
 
 resource "google_pubsub_topic_iam_member" "notification_config" {
-  topic  = module.notification_topic.id
+  topic  = module.notification_topic.topic_name
   role   = "roles/pubsub.publisher"
   member = "serviceAccount:${data.google_storage_transfer_project_service_account.default.email}"
 }
 
-resource "google_pubsub_topic_iam_member" "gcs_publisher" {
-  topic  = google_pubsub_topic.gcs_updates.name
-  role   = "roles/pubsub.publisher"
-  member = "serviceAccount:${data.google_storage_project_service_account.gcs_sa.email_address}"
-}
+# resource "google_pubsub_topic_iam_member" "gcs_publisher" {
+#   topic  = module.gcs_updates.topic_name
+#   role   = "roles/pubsub.publisher"
+#   member = "serviceAccount:${data.google_storage_project_service_account.gcs_sa.email_address}"
+# }
 
-resource "google_pubsub_subscription_iam_member" "transfer_subscriber" {
-  subscription = google_pubsub_subscription.transfer_sub.name
-  role         = "roles/pubsub.subscriber"
-  member       = "serviceAccount:${data.google_storage_transfer_project_service_account.default.email}"
-}
+# resource "google_pubsub_subscription_iam_member" "transfer_subscriber" {
+#   subscription = google_pubsub_subscription.transfer_sub.name
+#   role         = "roles/pubsub.subscriber"
+#   member       = "serviceAccount:${data.google_storage_transfer_project_service_account.default.email}"
+# }
 
 # -------------------------------------------------------------------------------
 # 1. Scheduled Storage Transfer Service
@@ -206,7 +217,7 @@ module "storage_transfer_scheduled" {
 
   notification_config = [
     {
-      pubsub_topic = module.notification_topic.id
+      pubsub_topic = module.notification_topic.topic_id
       event_types = [
         "TRANSFER_OPERATION_SUCCESS",
         "TRANSFER_OPERATION_FAILED"
@@ -246,7 +257,7 @@ module "gcs_replication" {
   event_stream = []
   notification_config = [
     {
-      pubsub_topic = module.notification_topic.id
+      pubsub_topic = module.notification_topic.topic_id
       event_types = [
         "TRANSFER_OPERATION_SUCCESS",
         "TRANSFER_OPERATION_FAILED"
@@ -287,13 +298,13 @@ module "storage_transfer_event_driven" {
 
   event_stream = [
     {
-      name = google_pubsub_subscription.transfer_sub.id
+      name = module.gcs_updates.subscription_ids["gcs_transfer_subscription"]
     }
   ]
 
   notification_config = [
     {
-      pubsub_topic = module.notification_topic.id
+      pubsub_topic = module.notification_topic.topic_id
       event_types = [
         "TRANSFER_OPERATION_SUCCESS",
         "TRANSFER_OPERATION_FAILED"
@@ -303,7 +314,6 @@ module "storage_transfer_event_driven" {
   ]
 
   depends_on = [
-    google_pubsub_subscription_iam_member.transfer_subscriber,
     google_storage_bucket_iam_member.source_bucket_object_viewer,
     google_storage_bucket_iam_member.destination_bucket_object_admin
   ]
