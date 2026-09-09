@@ -168,18 +168,6 @@ resource "google_pubsub_topic_iam_member" "notification_config" {
   member = "serviceAccount:${data.google_storage_transfer_project_service_account.default.email}"
 }
 
-# resource "google_pubsub_topic_iam_member" "gcs_publisher" {
-#   topic  = module.gcs_updates.topic_name
-#   role   = "roles/pubsub.publisher"
-#   member = "serviceAccount:${data.google_storage_project_service_account.gcs_sa.email_address}"
-# }
-
-# resource "google_pubsub_subscription_iam_member" "transfer_subscriber" {
-#   subscription = google_pubsub_subscription.transfer_sub.name
-#   role         = "roles/pubsub.subscriber"
-#   member       = "serviceAccount:${data.google_storage_transfer_project_service_account.default.email}"
-# }
-
 # -------------------------------------------------------------------------------
 # 1. Scheduled Storage Transfer Service
 # -------------------------------------------------------------------------------
