@@ -63,6 +63,7 @@ module "gcs_updates" {
 
 module "source_bucket" {
   source        = "./modules/gcs"
+  project_id    = var.project_id
   name          = "${var.source_bucket_name_prefix}-${var.project_id}"
   storage_class = var.storage_class
   location      = var.source_bucket_location
@@ -87,6 +88,7 @@ module "source_bucket" {
 
 module "destination_bucket" {
   source        = "./modules/gcs"
+  project_id    = var.project_id
   name          = "${var.destination_bucket_name_prefix}-${var.project_id}"
   storage_class = var.storage_class
   location      = var.destination_bucket_location
@@ -225,84 +227,84 @@ module "storage_transfer_scheduled" {
 # -------------------------------------------------------------------------------
 # 2. Continuous Replication Module
 # -------------------------------------------------------------------------------
-module "gcs_replication" {
-  source      = "./modules/storage-transfer"
-  name        = null
-  description = var.replication_job_description
-  status      = "ENABLED"
+# module "gcs_replication" {
+#   source      = "./modules/storage-transfer"
+#   name        = null
+#   description = var.replication_job_description
+#   status      = "ENABLED"
 
-  replication_spec = [{
-    source_bucket_name = module.source_bucket.bucket_name
-    sink_bucket_name   = module.destination_bucket.bucket_name
-    source_path        = ""
-    sink_path          = ""
-    transfer_options = {
-      delete_objects_unique_in_sink = var.delete_objects_unique_in_sink
-    }
-  }]
+#   replication_spec = [{
+#     source_bucket_name = module.source_bucket.bucket_name
+#     sink_bucket_name   = module.destination_bucket.bucket_name
+#     source_path        = ""
+#     sink_path          = ""
+#     transfer_options = {
+#       delete_objects_unique_in_sink = var.delete_objects_unique_in_sink
+#     }
+#   }]
 
-  schedule     = []
-  event_stream = []
-  notification_config = [
-    {
-      pubsub_topic = module.notification_topic.topic_id
-      event_types = [
-        "TRANSFER_OPERATION_SUCCESS",
-        "TRANSFER_OPERATION_FAILED"
-      ]
-      payload_format = "JSON"
-    }
-  ]
+#   schedule     = []
+#   event_stream = []
+#   notification_config = [
+#     {
+#       pubsub_topic = module.notification_topic.topic_id
+#       event_types = [
+#         "TRANSFER_OPERATION_SUCCESS",
+#         "TRANSFER_OPERATION_FAILED"
+#       ]
+#       payload_format = "JSON"
+#     }
+#   ]
 
-  depends_on = [
-    google_storage_bucket_iam_member.source_bucket_legacy_owner,
-    google_storage_bucket_iam_member.source_bucket_object_viewer,
-    google_storage_bucket_iam_member.destination_bucket_legacy_writer,
-    google_project_iam_member.sts_pubsub_editor,
-    google_project_iam_member.gcs_pubsub_publisher,
-    google_pubsub_topic_iam_member.notification_config
-  ]
-}
+#   depends_on = [
+#     google_storage_bucket_iam_member.source_bucket_legacy_owner,
+#     google_storage_bucket_iam_member.source_bucket_object_viewer,
+#     google_storage_bucket_iam_member.destination_bucket_legacy_writer,
+#     google_project_iam_member.sts_pubsub_editor,
+#     google_project_iam_member.gcs_pubsub_publisher,
+#     google_pubsub_topic_iam_member.notification_config
+#   ]
+# }
 
-# -------------------------------------------------------------------------------
-# 3. Event-Driven Stream Storage Transfer
-# -------------------------------------------------------------------------------
-module "storage_transfer_event_driven" {
-  source      = "./modules/storage-transfer"
-  name        = "transferJobs/storagetransfer-${random_id.id.hex}"
-  description = "${var.transfer_job_description} (Event Driven)"
+# # -------------------------------------------------------------------------------
+# # 3. Event-Driven Stream Storage Transfer
+# # -------------------------------------------------------------------------------
+# module "storage_transfer_event_driven" {
+#   source      = "./modules/storage-transfer"
+#   name        = "transferJobs/storagetransfer-${random_id.id.hex}"
+#   description = "${var.transfer_job_description} (Event Driven)"
 
-  transfer_spec = {
-    gcs_data_sink = {
-      bucket_name = module.destination_bucket.bucket_name
-    }
-    gcs_data_source = {
-      bucket_name = module.source_bucket.bucket_name
-    }
-    transfer_options = {
-      delete_objects_unique_in_sink = var.delete_objects_unique_in_sink
-    }
-  }
+#   transfer_spec = {
+#     gcs_data_sink = {
+#       bucket_name = module.destination_bucket.bucket_name
+#     }
+#     gcs_data_source = {
+#       bucket_name = module.source_bucket.bucket_name
+#     }
+#     transfer_options = {
+#       delete_objects_unique_in_sink = var.delete_objects_unique_in_sink
+#     }
+#   }
 
-  event_stream = [
-    {
-      name = module.gcs_updates.subscription_ids["gcs_transfer_subscription"]
-    }
-  ]
+#   event_stream = [
+#     {
+#       name = module.gcs_updates.subscription_ids["gcs_transfer_subscription"]
+#     }
+#   ]
 
-  notification_config = [
-    {
-      pubsub_topic = module.notification_topic.topic_id
-      event_types = [
-        "TRANSFER_OPERATION_SUCCESS",
-        "TRANSFER_OPERATION_FAILED"
-      ]
-      payload_format = "JSON"
-    }
-  ]
+#   notification_config = [
+#     {
+#       pubsub_topic = module.notification_topic.topic_id
+#       event_types = [
+#         "TRANSFER_OPERATION_SUCCESS",
+#         "TRANSFER_OPERATION_FAILED"
+#       ]
+#       payload_format = "JSON"
+#     }
+#   ]
 
-  depends_on = [
-    google_storage_bucket_iam_member.source_bucket_object_viewer,
-    google_storage_bucket_iam_member.destination_bucket_object_admin
-  ]
-}
+#   depends_on = [
+#     google_storage_bucket_iam_member.source_bucket_object_viewer,
+#     google_storage_bucket_iam_member.destination_bucket_object_admin
+#   ]
+# }
