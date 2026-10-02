@@ -182,9 +182,9 @@ resource "google_storage_notification" "notification" {
 # --------------------------------------------------------------------------------------------
 # Storage Anywhere Cache
 # --------------------------------------------------------------------------------------------
-resource "time_sleep" "destroy_wait_5000_seconds" {
+resource "time_sleep" "destroy_wait_50_seconds" {
   depends_on        = [google_storage_bucket.bucket]
-  destroy_duration  = "5000s"
+  destroy_duration  = "50s"
 }
 
 resource "google_storage_anywhere_cache" "cache" {
@@ -196,7 +196,7 @@ resource "google_storage_anywhere_cache" "cache" {
   zone            = var.enable_storage_anywhere_cache.zone
   ttl             = var.enable_storage_anywhere_cache.ttl
   ingest_on_write = var.enable_storage_anywhere_cache.ingest_on_write
-  depends_on      = [time_sleep.destroy_wait_5000_seconds]
+  depends_on      = [time_sleep.destroy_wait_50_seconds]
 }
 
 # --------------------------------------------------------------------------------------------

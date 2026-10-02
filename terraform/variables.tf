@@ -125,12 +125,6 @@ variable "replication_job_description" {
   default     = "Continuous replication from raw to processed bucket"
 }
 
-variable "schedule_end_offset_hours" {
-  description = "Hours from execution time when the scheduled transfer job should stop."
-  type        = number
-  default     = 24
-}
-
 variable "schedule_start_offset_minutes" {
   description = "Minutes to add to current time for the initial schedule start execution."
   type        = number
@@ -147,4 +141,13 @@ variable "delete_objects_unique_in_sink" {
   description = "Whether to delete objects in sink that do not exist in source."
   type        = bool
   default     = false
+}
+
+variable "schedule_end_offset_hours" {
+  type = number
+  validation {
+    condition     = var.schedule_end_offset_hours * 60 > var.schedule_start_offset_minutes
+    error_message = "End offset must be later than the start offset."
+  }
+  default = 24
 }
