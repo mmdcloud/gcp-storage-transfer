@@ -118,12 +118,12 @@ resource "google_storage_bucket_iam_member" "source_bucket_legacy_reader" {
   depends_on = [module.source_bucket]
 }
 
-# resource "google_storage_bucket_iam_member" "source_bucket_legacy_owner" {
-#   bucket     = module.source_bucket.bucket_name
-#   role       = "roles/storage.legacyBucketOwner"
-#   member     = "serviceAccount:${data.google_storage_transfer_project_service_account.default.email}"
-#   depends_on = [module.source_bucket]
-# }
+resource "google_storage_bucket_iam_member" "source_bucket_legacy_owner" {
+  bucket     = module.source_bucket.bucket_name
+  role       = "roles/storage.legacyBucketOwner"
+  member     = "serviceAccount:${data.google_storage_transfer_project_service_account.default.email}"
+  depends_on = [module.source_bucket]
+}
 
 # Destination Bucket Permissions
 resource "google_storage_bucket_iam_member" "destination_bucket_object_admin" {
@@ -141,17 +141,17 @@ resource "google_storage_bucket_iam_member" "destination_bucket_legacy_writer" {
 }
 
 # Project & Pub/Sub IAM
-# resource "google_project_iam_member" "sts_pubsub_editor" {
-#   project = var.project_id
-#   role    = "roles/pubsub.editor"
-#   member  = "serviceAccount:${data.google_storage_transfer_project_service_account.default.email}"
-# }
+resource "google_project_iam_member" "sts_pubsub_editor" {
+  project = var.project_id
+  role    = "roles/pubsub.editor"
+  member  = "serviceAccount:${data.google_storage_transfer_project_service_account.default.email}"
+}
 
-# resource "google_project_iam_member" "gcs_pubsub_publisher" {
-#   project = var.project_id
-#   role    = "roles/pubsub.publisher"
-#   member  = "serviceAccount:${data.google_storage_project_service_account.gcs_sa.email_address}"
-# }
+resource "google_project_iam_member" "gcs_pubsub_publisher" {
+  project = var.project_id
+  role    = "roles/pubsub.publisher"
+  member  = "serviceAccount:${data.google_storage_project_service_account.gcs_sa.email_address}"
+}
 
 resource "google_pubsub_topic_iam_member" "notification_config" {
   topic  = module.notification_topic.topic_name
@@ -163,7 +163,7 @@ resource "google_pubsub_topic_iam_member" "notification_config" {
 # 1. Scheduled Storage Transfer Service
 # -------------------------------------------------------------------------------
 module "storage_transfer_scheduled" {
-  source      = "./modules/storage-transfer"
+  source      = "./modules/storage-transfer/gcs-to-gcs-scheduled-transfer"
   description = var.transfer_job_description
 
   transfer_spec = {
@@ -216,7 +216,7 @@ module "storage_transfer_scheduled" {
 # 2. Continuous Replication Module
 # -------------------------------------------------------------------------------
 module "gcs_replication" {
-  source      = "./modules/storage-transfer"
+  source      = "./modules/storage-transfer/replication"
   name        = null
   description = var.replication_job_description
   status      = "ENABLED"
@@ -257,7 +257,7 @@ module "gcs_replication" {
 # 3. Event-Driven Stream Storage Transfer
 # -------------------------------------------------------------------------------
 module "storage_transfer_event_driven" {
-  source      = "./modules/storage-transfer"
+  source      = "./modules/storage-transfer/gcs-to-gcs-event-stream"
   name        = "transferJobs/storagetransfer-${random_id.id.hex}"
   description = "${var.transfer_job_description} (Event Driven)"
 
