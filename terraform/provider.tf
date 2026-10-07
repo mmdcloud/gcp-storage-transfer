@@ -13,10 +13,27 @@ terraform {
       source  = "hashicorp/time"
       version = ">= 0.11.0"
     }
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "~> 5.0"
+    }
   }
 }
 
 provider "google" {
-  project = "encoded-alpha-457108-e8"
+  project = var.project_id
 }
+
 provider "random" {}
+
+provider "aws" {
+  region = "us-east-1"
+}
+
+provider "azurerm" {
+  features {}
+}
