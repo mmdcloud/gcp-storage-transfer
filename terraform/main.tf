@@ -433,22 +433,44 @@ module "posix_to_gcs_transfer" {
 # -------------------------------------------------------------------------------
 # 5. AWS S3 to GCS Event-Driven Stream Transfer
 # -------------------------------------------------------------------------------
-# 5.1 AWS S3 Source Bucket
-resource "aws_s3_bucket" "source_bucket" {
-  bucket        = "source-s3-${var.project_id}"
+module "aws_source_bucket" {
+  source             = "./modules/aws/s3"
+  bucket_name        = "source-s3-${var.project_id}"
+  objects            = []
+  versioning_enabled = "Enabled"
+  cors = [
+    {
+      allowed_headers = ["*"]
+      allowed_methods = ["GET"]
+      allowed_origins = ["*"]
+      max_age_seconds = 3000
+    }
+  ]
+  bucket_policy = ""
   force_destroy = true
+  bucket_notification = {
+    queue = [
+      {
+        queue_arn = module.s3_event_queue.arn
+        events    = ["s3:ObjectCreated:*"]
+      }
+    ]
+    lambda_function = []
+  }
+  tags = {
+    Name        = "source-s3-${var.project_id}"
+  }
 }
 
-# 5.2 AWS SQS Queue for S3 ObjectCreated Notifications
-resource "aws_sqs_queue" "s3_event_queue" {
-  name                      = "s3-gcs-transfer-events-${var.project_id}"
-  message_retention_seconds = 604800 # 7 days
-  receive_wait_time_seconds = 20     # Long polling
-}
-
-# 5.3 SQS Queue Policy (Permit S3 notifications & GCP STS consumer access)
-resource "aws_sqs_queue_policy" "s3_event_queue_policy" {
-  queue_url = aws_sqs_queue.s3_event_queue.id
+module "s3_event_queue" {
+  source                     = "./modules/aws/sqs"
+  queue_name                 = "s3-gcs-transfer-events-${var.project_id}"
+  delay_seconds              = 0
+  maxReceiveCount            = 3
+  max_message_size           = 262144
+  message_retention_seconds  = 345600
+  visibility_timeout_seconds = 180
+  receive_wait_time_seconds  = 20
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -459,33 +481,26 @@ resource "aws_sqs_queue_policy" "s3_event_queue_policy" {
           Service = "s3.amazonaws.com"
         }
         Action   = "sqs:SendMessage"
-        Resource = aws_sqs_queue.s3_event_queue.arn
+        Resource = module.s3_event_queue.arn
         Condition = {
           ArnEquals = {
-            "aws:SourceArn" = aws_s3_bucket.source_bucket.arn
+            "aws:SourceArn" = module.aws_source_bucket.arn
           }
         }
       }
     ]
   })
-}
-
-# 5.4 S3 Bucket Notification to SQS
-resource "aws_s3_bucket_notification" "s3_events" {
-  bucket = aws_s3_bucket.source_bucket.id
-
-  queue {
-    queue_arn = aws_sqs_queue.s3_event_queue.arn
-    events    = ["s3:ObjectCreated:*"]
+  tags = {
+    Name = "s3-gcs-transfer-events-${var.project_id}"
   }
-
-  depends_on = [aws_sqs_queue_policy.s3_event_queue_policy]
 }
 
-# 5.5 AWS IAM Role for GCP Storage Transfer Service
-resource "aws_iam_role" "gcp_sts_role" {
-  name = "gcp-storage-transfer-role-${var.project_id}"
-
+module "gcp_sts_role" {
+  source             = "./modules/aws/iam"
+  role_name          = "gcp-storage-transfer-role-${var.project_id}"
+  role_description   = "IAM role for media metadata update lambda function"
+  policy_name        = "gcp-storage-transfer-role-policy-${var.project_id}"
+  policy_description = "IAM policy for media metadata update lambda function"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -503,13 +518,6 @@ resource "aws_iam_role" "gcp_sts_role" {
       }
     ]
   })
-}
-
-# 5.6 AWS IAM Policy for S3 read & SQS consume permissions
-resource "aws_iam_role_policy" "gcp_sts_policy" {
-  name = "gcp-sts-s3-sqs-access"
-  role = aws_iam_role.gcp_sts_role.id
-
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -523,8 +531,8 @@ resource "aws_iam_role_policy" "gcp_sts_policy" {
           "s3:GetBucketLocation"
         ]
         Resource = [
-          aws_s3_bucket.source_bucket.arn,
-          "${aws_s3_bucket.source_bucket.arn}/*"
+          module.aws_source_bucket.arn,
+          "${module.aws_source_bucket.arn}/*"
         ]
       },
       {
@@ -535,13 +543,15 @@ resource "aws_iam_role_policy" "gcp_sts_policy" {
           "sqs:DeleteMessage",
           "sqs:GetQueueAttributes"
         ]
-        Resource = aws_sqs_queue.s3_event_queue.arn
+        Resource = module.s3_event_queue.arn
       }
     ]
   })
+  tags = {
+    Name = "gcp-storage-transfer-role-${var.project_id}"
+  }
 }
 
-# 5.7 AWS S3 to GCS Transfer Job Module
 module "storage_transfer_s3_event_stream" {
   source      = "./modules/gcp/storage-transfer/s3-gcs-event-stream"
   name        = "transferJobs/s3-to-gcs-stream-${random_id.id.hex}"
@@ -550,9 +560,9 @@ module "storage_transfer_s3_event_stream" {
 
   transfer_spec = {
     aws_s3_data_source = {
-      bucket_name = aws_s3_bucket.source_bucket.id
+      bucket_name = module.aws_source_bucket.id
       path        = "incoming/"
-      role_arn    = aws_iam_role.gcp_sts_role.arn
+      role_arn    = module.gcp_sts_role.arn
     }
 
     gcs_data_sink = {
@@ -574,7 +584,7 @@ module "storage_transfer_s3_event_stream" {
 
   event_stream = [
     {
-      name = aws_sqs_queue.s3_event_queue.arn
+      name = module.s3_event_queue.arn
     }
   ]
 
@@ -592,8 +602,8 @@ module "storage_transfer_s3_event_stream" {
   depends_on = [
     google_storage_bucket_iam_member.destination_bucket_object_admin,
     google_pubsub_topic_iam_member.notification_config,
-    aws_s3_bucket_notification.s3_events,
-    aws_iam_role_policy.gcp_sts_policy
+    module.source_bucket,
+    module.gcp_sts_role
   ]
 }
 
