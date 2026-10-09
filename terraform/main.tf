@@ -608,7 +608,8 @@ module "storage_transfer_s3_event_stream" {
   depends_on = [
     google_storage_bucket_iam_member.destination_bucket_object_admin,
     google_pubsub_topic_iam_member.notification_config,
-    module.source_bucket,
+    module.aws_source_bucket,
+    module.s3_event_queue,
     module.gcp_sts_role
   ]
 }
@@ -786,6 +787,9 @@ module "storage_transfer_azure_event_stream" {
     google_storage_bucket_iam_member.destination_bucket_object_admin,
     google_pubsub_topic_iam_member.notification_config,
     azurerm_storage_queue.blob_events,
-    azurerm_eventgrid_system_topic_event_subscription.blob_created
+    azurerm_eventgrid_system_topic_event_subscription.blob_created,
+    azuread_application_federated_identity_credential.gcp_sts_fed_cred,
+    azurerm_role_assignment.sts_blob_reader,
+    azurerm_role_assignment.sts_queue_processor
   ]
 }
