@@ -43,17 +43,23 @@ module "gcs_updates" {
   topic_name    = var.gcs_updates_topic_name
   enable_schema = false
   topic_iam = {
-    bindings = {
-      "roles/pubsub.publisher" = ["serviceAccount:${data.google_storage_project_service_account.gcs_sa.email_address}"]
-    }
+    members = [
+      {
+        role   = "roles/pubsub.publisher"
+        member = "serviceAccount:${data.google_storage_project_service_account.gcs_sa.email_address}"
+      }
+    ]
   }
   subscriptions = {
     gcs_transfer_subscription = {
       subscription_name = var.transfer_subscription_name
       iam = {
-        bindings = {
-          "roles/pubsub.subscriber" = ["serviceAccount:${data.google_storage_transfer_project_service_account.default.email}"]
-        }
+        members = [
+          {
+            role   = "roles/pubsub.subscriber"
+            member = "serviceAccount:${data.google_storage_transfer_project_service_account.default.email}"
+          }
+        ]
       }
       message_retention_duration = var.subscription_message_retention
       retain_acked_messages      = false
@@ -498,9 +504,9 @@ module "s3_event_queue" {
 module "gcp_sts_role" {
   source             = "./modules/aws/iam"
   role_name          = "gcp-storage-transfer-role-${var.project_id}"
-  role_description   = "IAM role for media metadata update lambda function"
+  role_description   = "IAM role for gcp storage transfer"
   policy_name        = "gcp-storage-transfer-role-policy-${var.project_id}"
-  policy_description = "IAM policy for media metadata update lambda function"
+  policy_description = "IAM policy for gcp storage transfer"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -611,14 +617,15 @@ module "storage_transfer_s3_event_stream" {
 # 6. Azure Blob Storage to GCS Event-Driven Stream Transfer
 # -------------------------------------------------------------------------------
 data "azuread_client_config" "current" {}
-# 1. Create Azure AD App Registration for GCP STS
+
 resource "azuread_application" "gcp_sts_app" {
   display_name = "gcp-storage-transfer-service-${var.project_id}"
 }
+
 resource "azuread_service_principal" "gcp_sts_sp" {
   client_id = azuread_application.gcp_sts_app.client_id
 }
-# 2. Establish Federated Trust with GCP Storage Transfer Service SA
+
 resource "azuread_application_federated_identity_credential" "gcp_sts_fed_cred" {
   application_id = azuread_application.gcp_sts_app.id
   display_name   = "gcp-sts-federated-credential"
@@ -627,26 +634,24 @@ resource "azuread_application_federated_identity_credential" "gcp_sts_fed_cred" 
   issuer         = "https://accounts.google.com"
   subject        = data.google_storage_transfer_project_service_account.default.subject_id
 }
-# 3. Grant Azure RBAC: Read Blobs
+
 resource "azurerm_role_assignment" "sts_blob_reader" {
   scope                = azurerm_storage_account.source_storage.id
   role_definition_name = "Storage Blob Data Reader"
   principal_id         = azuread_service_principal.gcp_sts_sp.object_id
 }
-# 4. Grant Azure RBAC: Process Event Grid Queue Messages
+
 resource "azurerm_role_assignment" "sts_queue_processor" {
   scope                = azurerm_storage_account.source_storage.id
   role_definition_name = "Storage Queue Data Message Processor"
   principal_id         = azuread_service_principal.gcp_sts_sp.object_id
 }
 
-# 6.1 Azure Resource Group
 resource "azurerm_resource_group" "source_rg" {
   name     = "rg-storage-transfer-${var.project_id}"
   location = "eastus"
 }
 
-# 6.2 Azure Storage Account & Container
 resource "azurerm_storage_account" "source_storage" {
   name                     = "stsaz${random_id.id.hex}"
   resource_group_name      = azurerm_resource_group.source_rg.name
@@ -661,13 +666,11 @@ resource "azurerm_storage_container" "source_container" {
   container_access_type = "private"
 }
 
-# 6.3 Azure Storage Queue for Event Grid BlobCreated Notifications
 resource "azurerm_storage_queue" "blob_events" {
   name               = "blob-created-events"
   storage_account_id = azurerm_storage_account.source_storage.id
 }
 
-# 6.4 Azure Event Grid System Topic for Storage Account
 resource "azurerm_eventgrid_system_topic" "storage_events" {
   name                = "st-eventgrid-topic-${var.project_id}"
   resource_group_name = azurerm_resource_group.source_rg.name
@@ -676,7 +679,6 @@ resource "azurerm_eventgrid_system_topic" "storage_events" {
   topic_type          = "Microsoft.Storage.StorageAccounts"
 }
 
-# 6.5 Azure Event Grid Event Subscription targeting Storage Queue
 resource "azurerm_eventgrid_system_topic_event_subscription" "blob_created" {
   name                = "blob-created-subscription"
   system_topic        = azurerm_eventgrid_system_topic.storage_events.name
@@ -692,7 +694,6 @@ resource "azurerm_eventgrid_system_topic_event_subscription" "blob_created" {
   ]
 }
 
-# 6.6 Azure Account SAS Token for Storage Transfer Service Authentication (Blob + Queue access)
 data "azurerm_storage_account_sas" "account_sas" {
   connection_string = azurerm_storage_account.source_storage.primary_connection_string
   https_only        = true
@@ -728,7 +729,6 @@ data "azurerm_storage_account_sas" "account_sas" {
   }
 }
 
-# 6.7 Azure Blob to GCS Transfer Job Module
 module "storage_transfer_azure_event_stream" {
   source      = "./modules/gcp/storage-transfer/azure-to-gcs-event-stream"
   name        = "transferJobs/azure-to-gcs-stream-${random_id.id.hex}"
