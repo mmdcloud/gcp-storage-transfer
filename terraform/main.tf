@@ -617,6 +617,13 @@ module "storage_transfer_s3_event_stream" {
 # -------------------------------------------------------------------------------
 # 6. Azure Blob Storage to GCS Event-Driven Stream Transfer
 # -------------------------------------------------------------------------------
+# Grant GCP STS Service Agent permission to create OIDC tokens for Azure federation
+resource "google_project_iam_member" "sts_token_creator" {
+  project = var.project_id
+  role    = "roles/iam.serviceAccountTokenCreator"
+  member  = "serviceAccount:${data.google_storage_transfer_project_service_account.default.email}"
+}
+
 data "azuread_client_config" "current" {}
 
 resource "azuread_application" "gcp_sts_app" {
@@ -636,9 +643,21 @@ resource "azuread_application_federated_identity_credential" "gcp_sts_fed_cred" 
   subject        = data.google_storage_transfer_project_service_account.default.subject_id
 }
 
+resource "azurerm_role_assignment" "sts_account_reader" {
+  scope                = azurerm_storage_account.source_storage.id
+  role_definition_name = "Reader"
+  principal_id         = azuread_service_principal.gcp_sts_sp.object_id
+}
+
 resource "azurerm_role_assignment" "sts_blob_reader" {
   scope                = azurerm_storage_account.source_storage.id
   role_definition_name = "Storage Blob Data Reader"
+  principal_id         = azuread_service_principal.gcp_sts_sp.object_id
+}
+
+resource "azurerm_role_assignment" "sts_queue_contributor" {
+  scope                = azurerm_storage_account.source_storage.id
+  role_definition_name = "Storage Queue Data Contributor"
   principal_id         = azuread_service_principal.gcp_sts_sp.object_id
 }
 
@@ -646,6 +665,20 @@ resource "azurerm_role_assignment" "sts_queue_processor" {
   scope                = azurerm_storage_account.source_storage.id
   role_definition_name = "Storage Queue Data Message Processor"
   principal_id         = azuread_service_principal.gcp_sts_sp.object_id
+}
+
+# Wait for Azure AD federated credentials and RBAC propagation
+resource "time_sleep" "wait_for_azure_federation" {
+  create_duration = "60s"
+
+  depends_on = [
+    azuread_application_federated_identity_credential.gcp_sts_fed_cred,
+    azurerm_role_assignment.sts_account_reader,
+    azurerm_role_assignment.sts_blob_reader,
+    azurerm_role_assignment.sts_queue_contributor,
+    azurerm_role_assignment.sts_queue_processor,
+    google_project_iam_member.sts_token_creator
+  ]
 }
 
 resource "azurerm_resource_group" "source_rg" {
@@ -788,8 +821,6 @@ module "storage_transfer_azure_event_stream" {
     google_pubsub_topic_iam_member.notification_config,
     azurerm_storage_queue.blob_events,
     azurerm_eventgrid_system_topic_event_subscription.blob_created,
-    azuread_application_federated_identity_credential.gcp_sts_fed_cred,
-    azurerm_role_assignment.sts_blob_reader,
-    azurerm_role_assignment.sts_queue_processor
+    time_sleep.wait_for_azure_federation
   ]
 }
