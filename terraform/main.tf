@@ -617,7 +617,6 @@ module "storage_transfer_s3_event_stream" {
 # -------------------------------------------------------------------------------
 # 6. Azure Blob Storage to GCS Event-Driven Stream Transfer
 # -------------------------------------------------------------------------------
-# Grant GCP STS Service Agent permission to create OIDC tokens for Azure federation
 resource "google_project_iam_member" "sts_token_creator" {
   project = var.project_id
   role    = "roles/iam.serviceAccountTokenCreator"
@@ -696,21 +695,21 @@ resource "azurerm_storage_account" "source_storage" {
 
 resource "azurerm_storage_container" "source_container" {
   name                  = "incoming-blobs"
-  storage_account_id    = azurerm_storage_account.source_storage.id
+  storage_account_name  = azurerm_storage_account.source_storage.name
   container_access_type = "private"
 }
 
 resource "azurerm_storage_queue" "blob_events" {
-  name               = "blob-created-events"
-  storage_account_id = azurerm_storage_account.source_storage.id
+  name                 = "blob-created-events"
+  storage_account_name = azurerm_storage_account.source_storage.name
 }
 
 resource "azurerm_eventgrid_system_topic" "storage_events" {
-  name                = "st-eventgrid-topic-${var.project_id}"
-  resource_group_name = azurerm_resource_group.source_rg.name
-  location            = azurerm_resource_group.source_rg.location
-  source_resource_id  = azurerm_storage_account.source_storage.id
-  topic_type          = "Microsoft.Storage.StorageAccounts"
+  name                   = "st-eventgrid-topic-${var.project_id}"
+  resource_group_name    = azurerm_resource_group.source_rg.name
+  location               = azurerm_resource_group.source_rg.location
+  source_arm_resource_id = azurerm_storage_account.source_storage.id
+  topic_type             = "Microsoft.Storage.StorageAccounts"
 }
 
 resource "azurerm_eventgrid_system_topic_event_subscription" "blob_created" {
