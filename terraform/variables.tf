@@ -12,6 +12,12 @@ variable "region" {
   default     = "asia-south1"
 }
 
+variable "aws_region" {
+  description = "Primary AWS region for resources."
+  type        = string
+  default     = "ap-southeast-2"
+}
+
 # -------------------------------------------------------------------------------
 # GCS Bucket Configuration
 # -------------------------------------------------------------------------------
@@ -150,4 +156,44 @@ variable "schedule_end_offset_hours" {
     error_message = "End offset must be later than the start offset."
   }
   default = 24
+}
+
+variable "cloud_ftp_region" {
+  description = "Region for Cloud FTP resources (e.g. us-central1, europe-west1)."
+  type        = string
+  default     = "us-central1"
+}
+
+variable "cloud_ftp_server_name" {
+  description = "Identifier for the Cloud FTP / SFTP server."
+  type        = string
+  default     = "prod-managed-sftp"
+}
+
+variable "cloud_ftp_access_type" {
+  description = "Access type for Cloud FTP server: EXTERNAL (Public with CIDR allowlist) or INTERNAL (Private Service Connect)."
+  type        = string
+  default     = "EXTERNAL"
+  validation {
+    condition     = contains(["EXTERNAL", "INTERNAL"], var.cloud_ftp_access_type)
+    error_message = "cloud_ftp_access_type must be either 'EXTERNAL' or 'INTERNAL'."
+  }
+}
+
+variable "cloud_ftp_allowed_cidrs" {
+  description = "List of allowed CIDR IP blocks permitted to access the external SFTP server."
+  type        = list(string)
+  default     = ["203.0.113.0/24"] # Example corporate IP block. Set to specific client CIDRs or ["0.0.0.0/0"] for open testing
+}
+
+variable "cloud_ftp_username" {
+  description = "SFTP username for external partner or internal workflow."
+  type        = string
+  default     = "partner-upload"
+}
+
+variable "cloud_ftp_user_ssh_public_key" {
+  description = "OpenSSH public key for the SFTP user. If left empty, an automated SSH key pair will be generated via tls_private_key."
+  type        = string
+  default     = ""
 }

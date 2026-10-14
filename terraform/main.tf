@@ -439,9 +439,43 @@ module "posix_to_gcs_transfer" {
 # -------------------------------------------------------------------------------
 # 5. AWS S3 to GCS Event-Driven Stream Transfer
 # -------------------------------------------------------------------------------
+locals {
+  s3_source_bucket_name = "source-s3-${var.project_id}"
+  s3_source_bucket_arn  = "arn:aws:s3:::${local.s3_source_bucket_name}"
+  s3_queue_name         = "s3-gcs-transfer-events-${var.project_id}"
+}
+
+data "aws_caller_identity" "current" {}
+
+module "s3_event_queue" {
+  source                     = "./modules/aws/sqs"
+  queue_name                 = local.s3_queue_name
+  delay_seconds              = 0
+  maxReceiveCount            = 3
+  max_message_size           = 262144
+  message_retention_seconds  = 345600
+  visibility_timeout_seconds = 180
+  receive_wait_time_seconds  = 20
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "AllowS3BucketEvents"
+      Effect    = "Allow"
+      Principal = { Service = "s3.amazonaws.com" }
+      Action    = "sqs:SendMessage"
+      Resource  = "arn:aws:sqs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:${local.s3_queue_name}"
+      Condition = {
+        ArnEquals    = { "aws:SourceArn" = local.s3_source_bucket_arn }
+        StringEquals = { "aws:SourceAccount" = data.aws_caller_identity.current.account_id }
+      }
+    }]
+  })
+  tags = { Name = local.s3_queue_name }
+}
+
 module "aws_source_bucket" {
   source             = "./modules/aws/s3"
-  bucket_name        = "source-s3-${var.project_id}"
+  bucket_name        = local.s3_source_bucket_name
   objects            = []
   versioning_enabled = "Enabled"
   cors = [
@@ -464,40 +498,7 @@ module "aws_source_bucket" {
     lambda_function = []
   }
   tags = {
-    Name        = "source-s3-${var.project_id}"
-  }
-}
-
-module "s3_event_queue" {
-  source                     = "./modules/aws/sqs"
-  queue_name                 = "s3-gcs-transfer-events-${var.project_id}"
-  delay_seconds              = 0
-  maxReceiveCount            = 3
-  max_message_size           = 262144
-  message_retention_seconds  = 345600
-  visibility_timeout_seconds = 180
-  receive_wait_time_seconds  = 20
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "AllowS3BucketEvents"
-        Effect = "Allow"
-        Principal = {
-          Service = "s3.amazonaws.com"
-        }
-        Action   = "sqs:SendMessage"
-        Resource = module.s3_event_queue.arn
-        Condition = {
-          ArnEquals = {
-            "aws:SourceArn" = module.aws_source_bucket.arn
-          }
-        }
-      }
-    ]
-  })
-  tags = {
-    Name = "s3-gcs-transfer-events-${var.project_id}"
+    Name = local.s3_source_bucket_name
   }
 }
 
@@ -547,6 +548,7 @@ module "gcp_sts_role" {
         Action = [
           "sqs:ReceiveMessage",
           "sqs:DeleteMessage",
+          "sqs:ChangeMessageVisibility",
           "sqs:GetQueueAttributes"
         ]
         Resource = module.s3_event_queue.arn
@@ -567,13 +569,12 @@ module "storage_transfer_s3_event_stream" {
   transfer_spec = {
     aws_s3_data_source = {
       bucket_name = module.aws_source_bucket.id
-      path        = "incoming/"
+      path        = ""
       role_arn    = module.gcp_sts_role.arn
     }
 
     gcs_data_sink = {
       bucket_name = module.destination_bucket.bucket_name
-      path        = "s3_synced_data/"
     }
 
     object_conditions = {
@@ -727,40 +728,42 @@ resource "azurerm_eventgrid_system_topic_event_subscription" "blob_created" {
   ]
 }
 
-data "azurerm_storage_account_sas" "account_sas" {
-  connection_string = azurerm_storage_account.source_storage.primary_connection_string
-  https_only        = true
-  signed_version    = "2022-11-02"
+# Unomment when SAS token is needed
 
-  resource_types {
-    service   = true
-    container = true
-    object    = true
-  }
+# data "azurerm_storage_account_sas" "account_sas" {
+#   connection_string = azurerm_storage_account.source_storage.primary_connection_string
+#   https_only        = true
+#   signed_version    = "2022-11-02"
 
-  services {
-    blob  = true
-    queue = true
-    table = false
-    file  = false
-  }
+#   resource_types {
+#     service   = true
+#     container = true
+#     object    = true
+#   }
 
-  start  = "2026-01-01T00:00:00Z"
-  expiry = "2030-01-01T00:00:00Z"
+#   services {
+#     blob  = true
+#     queue = true
+#     table = false
+#     file  = false
+#   }
 
-  permissions {
-    read    = true
-    write   = false
-    delete  = false
-    list    = true
-    add     = false
-    create  = false
-    update  = false
-    process = true # Required for STS to read and dequeue event notifications from Azure Queue
-    tag     = false
-    filter  = false
-  }
-}
+#   start  = "2026-01-01T00:00:00Z"
+#   expiry = "2030-01-01T00:00:00Z"
+
+#   permissions {
+#     read    = true
+#     write   = false
+#     delete  = false
+#     list    = true
+#     add     = false
+#     create  = false
+#     update  = false
+#     process = true # Required for STS to read and dequeue event notifications from Azure Queue
+#     tag     = false
+#     filter  = false
+#   }
+# }
 
 module "storage_transfer_azure_event_stream" {
   source      = "./modules/gcp/storage-transfer/azure-to-gcs-event-stream"
@@ -777,6 +780,7 @@ module "storage_transfer_azure_event_stream" {
         client_id = azuread_application.gcp_sts_app.client_id
         tenant_id = data.azuread_client_config.current.tenant_id
       }
+
       # azure_credentials = {
       #   sas_token = data.azurerm_storage_account_sas.account_sas.sas
       # }
@@ -822,4 +826,217 @@ module "storage_transfer_azure_event_stream" {
     azurerm_eventgrid_system_topic_event_subscription.blob_created,
     time_sleep.wait_for_azure_federation
   ]
+}
+
+# -------------------------------------------------------------------------------
+# 7. Cloud FTP
+# -------------------------------------------------------------------------------
+resource "google_project_service" "ftp_api" {
+  project                    = var.project_id
+  service                    = "ftp.googleapis.com"
+  disable_dependent_services = false
+  disable_on_destroy         = false
+}
+
+resource "google_project_service" "compute_api" {
+  project                    = var.project_id
+  service                    = "compute.googleapis.com"
+  disable_dependent_services = false
+  disable_on_destroy         = false
+}
+
+# resource "random_id" "ftp_bucket_suffix" {
+#   byte_length = 4
+# }
+
+# resource "google_storage_bucket" "sftp_storage_bucket" {
+#   name                        = "sftp-exchange-${var.project_id}-${random_id.ftp_bucket_suffix.hex}"
+#   location                    = var.cloud_ftp_region
+#   project                     = var.project_id
+#   storage_class               = "STANDARD"
+#   uniform_bucket_level_access = true
+#   force_destroy               = true
+
+#   versioning {
+#     enabled = true
+#   }
+
+#   lifecycle_rule {
+#     action {
+#       type = "Delete"
+#     }
+#     condition {
+#       age        = 90
+#       with_state = "ARCHIVED"
+#     }
+#   }
+
+#   labels = {
+#     environment = "production"
+#     service     = "cloud-ftp"
+#     managed_by  = "terraform"
+#   }
+# }
+
+resource "google_service_account" "sftp_user_sa" {
+  account_id   = "sftp-user-${var.cloud_ftp_username}"
+  display_name = "Cloud FTP Managed User Identity for ${var.cloud_ftp_username}"
+  description  = "Dedicated service account mapped to SFTP user ${var.cloud_ftp_username} for scoped GCS operations"
+  project      = var.project_id
+}
+
+# resource "google_storage_bucket_iam_member" "sftp_sa_bucket_access" {
+#   bucket = google_storage_bucket.sftp_storage_bucket.name
+#   role   = "roles/storage.objectUser"
+#   member = "serviceAccount:${google_service_account.sftp_user_sa.email}"
+# }
+
+# -------------------------------------------------------------------------------
+# 4. Cloud FTP Service Agent Identity & Token Creator IAM Binding
+# -------------------------------------------------------------------------------
+resource "google_project_service_identity" "ftp_service_agent" {
+  provider = google-beta
+  project  = var.project_id
+  service  = "ftp.googleapis.com"
+
+  depends_on = [google_project_service.ftp_api]
+}
+
+resource "google_service_account_iam_member" "ftp_service_agent_token_creator" {
+  service_account_id = google_service_account.sftp_user_sa.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${google_project_service_identity.ftp_service_agent.email}"
+}
+
+resource "tls_private_key" "sftp_client_key" {
+  count     = var.cloud_ftp_user_ssh_public_key == "" ? 1 : 0
+  algorithm = "RSA"
+  rsa_bits  = 4096
+}
+
+locals {
+  effective_ssh_public_key = var.cloud_ftp_user_ssh_public_key != "" ? var.cloud_ftp_user_ssh_public_key : (
+    length(tls_private_key.sftp_client_key) > 0 ? trimspace(tls_private_key.sftp_client_key[0].public_key_openssh) : ""
+  )
+}
+
+module "sftp_vpc" {
+  source                          = "./modules/gcp/vpc"
+  vpc_name                        = "sftp-psc-vpc"
+  delete_default_routes_on_create = false
+  auto_create_subnetworks         = false
+  routing_mode                    = "REGIONAL"
+  subnets = [
+    {
+      name                     = "sftp-psc-subnet"
+      region                   = var.cloud_ftp_region
+      private_ip_google_access = true
+      ip_cidr_range            = "10.10.0.0/24"
+    }
+  ]
+  firewall_data = []
+}
+
+
+# Reserved internal IP for Private Service Connect Endpoint
+resource "google_compute_address" "sftp_psc_internal_ip" {
+  count        = var.cloud_ftp_access_type == "INTERNAL" ? 1 : 0
+  name         = "sftp-psc-internal-ip"
+  subnetwork   = google_compute_subnetwork.sftp_subnet.id
+  address_type = "INTERNAL"
+  region       = var.cloud_ftp_region
+  project      = var.project_id
+}
+
+resource "google_storage_ftp_server" "sftp_server" {
+  name         = var.cloud_ftp_server_name
+  location     = var.cloud_ftp_region
+  project      = var.project_id
+  display_name = "Production Managed SFTP Server"
+  access_type  = var.cloud_ftp_access_type
+
+  dynamic "external_config" {
+    for_each = var.cloud_ftp_access_type == "EXTERNAL" ? [1] : []
+    content {
+      allowed_cidr_blocks = var.cloud_ftp_allowed_cidrs
+    }
+  }
+
+  dynamic "internal_config" {
+    for_each = var.cloud_ftp_access_type == "INTERNAL" ? [1] : []
+    content {
+      # Consumer projects allowed to connect via Private Service Connect
+      consumer_accept_list {
+        project_id_or_num = var.project_id
+        connection_limit  = 10
+      }
+    }
+  }
+
+  labels = {
+    environment = "production"
+    service     = "cloud-ftp"
+    managed_by  = "terraform"
+  }
+
+  depends_on = [
+    google_project_service.ftp_api,
+    google_project_service_identity.ftp_service_agent,
+    google_service_account_iam_member.ftp_service_agent_token_creator
+  ]
+}
+
+resource "google_compute_forwarding_rule" "sftp_psc_endpoint" {
+  count                 = var.cloud_ftp_access_type == "INTERNAL" ? 1 : 0
+  name                  = "sftp-psc-forwarding-rule"
+  region                = var.cloud_ftp_region
+  project               = var.project_id
+  network               = google_compute_network.sftp_vpc.id
+  subnetwork            = google_compute_subnetwork.sftp_subnet.id
+  ip_address            = google_compute_address.sftp_psc_internal_ip[0].id
+  target                = google_storage_ftp_server.sftp_server.internal_config[0].service_attachment
+  load_balancing_scheme = ""
+}
+
+resource "google_storage_ftp_user" "sftp_user" {
+  provider = google-beta
+  server   = google_storage_ftp_server.sftp_server.name
+  username = var.cloud_ftp_username
+  project  = var.project_id
+
+  user_credentials {
+    ssh_public_key = local.effective_ssh_public_key
+  }
+
+  storage_directory_mappings {
+    bucket    = module.source_bucket.bucket_name
+    directory = "/"
+  }
+
+  labels = {
+    user        = var.cloud_ftp_username
+    managed_by  = "terraform"
+    environment = "production"
+  }
+
+  depends_on = [
+    google_storage_ftp_server.sftp_server,
+    google_service_account_iam_member.ftp_service_agent_token_creator,
+    google_storage_bucket_iam_member.sftp_sa_bucket_access
+  ]
+}
+
+resource "google_project_iam_audit_config" "ftp_audit_logs" {
+  project = var.project_id
+  service = "ftp.googleapis.com"
+
+  audit_log_config {
+    log_type = "ADMIN_READ"
+  }
+  audit_log_config {
+    log_type = "DATA_READ"
+  }
+  audit_log_config {
+    log_type = "DATA_WRITE"
+  }
 }
