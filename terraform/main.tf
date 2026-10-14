@@ -35,6 +35,12 @@ resource "random_id" "id" {
   byte_length = 8
 }
 
+resource "google_project_iam_member" "sts_token_creator" {
+  project = var.project_id
+  role    = "roles/iam.serviceAccountTokenCreator"
+  member  = "serviceAccount:${data.google_storage_transfer_project_service_account.default.email}"
+}
+
 # -------------------------------------------------------------------------------
 # Core Infrastructure: Storage Buckets & Event Streams
 # -------------------------------------------------------------------------------
@@ -368,7 +374,6 @@ module "posix_to_gcs_transfer" {
     # Destination GCS target bucket and optional subfolder
     gcs_data_sink = {
       bucket_name = module.destination_bucket.bucket_name
-      path        = "nfs_data_sync/"
     }
 
     # Object conditions & filters
@@ -458,17 +463,28 @@ module "s3_event_queue" {
   receive_wait_time_seconds  = 20
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Sid       = "AllowS3BucketEvents"
-      Effect    = "Allow"
-      Principal = { Service = "s3.amazonaws.com" }
-      Action    = "sqs:SendMessage"
-      Resource  = "arn:aws:sqs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:${local.s3_queue_name}"
-      Condition = {
-        ArnEquals    = { "aws:SourceArn" = local.s3_source_bucket_arn }
-        StringEquals = { "aws:SourceAccount" = data.aws_caller_identity.current.account_id }
+    Statement = [
+      {
+        Sid    = "AllowAccountOwnerAndRoles"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        }
+        Action   = "sqs:*"
+        Resource = "arn:aws:sqs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:${local.s3_queue_name}"
+      },
+      {
+        Sid       = "AllowS3BucketEvents"
+        Effect    = "Allow"
+        Principal = { Service = "s3.amazonaws.com" }
+        Action    = "sqs:SendMessage"
+        Resource  = "arn:aws:sqs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:${local.s3_queue_name}"
+        Condition = {
+          ArnEquals    = { "aws:SourceArn" = local.s3_source_bucket_arn }
+          StringEquals = { "aws:SourceAccount" = data.aws_caller_identity.current.account_id }
+        }
       }
-    }]
+    ]
   })
   tags = { Name = local.s3_queue_name }
 }
@@ -534,6 +550,7 @@ module "gcp_sts_role" {
         Action = [
           "s3:GetObject",
           "s3:GetObjectVersion",
+          "s3:GetObjectTagging",
           "s3:ListBucket",
           "s3:GetBucketLocation"
         ]
@@ -549,7 +566,8 @@ module "gcp_sts_role" {
           "sqs:ReceiveMessage",
           "sqs:DeleteMessage",
           "sqs:ChangeMessageVisibility",
-          "sqs:GetQueueAttributes"
+          "sqs:GetQueueAttributes",
+          "sqs:GetQueueUrl"
         ]
         Resource = module.s3_event_queue.arn
       }
@@ -558,6 +576,17 @@ module "gcp_sts_role" {
   tags = {
     Name = "gcp-storage-transfer-role-${var.project_id}"
   }
+}
+
+# Wait for AWS IAM role and SQS queue policy propagation
+resource "time_sleep" "wait_for_aws_role_propagation" {
+  create_duration = "30s"
+
+  depends_on = [
+    module.gcp_sts_role,
+    module.s3_event_queue,
+    google_project_iam_member.sts_token_creator
+  ]
 }
 
 module "storage_transfer_s3_event_stream" {
@@ -569,16 +598,11 @@ module "storage_transfer_s3_event_stream" {
   transfer_spec = {
     aws_s3_data_source = {
       bucket_name = module.aws_source_bucket.id
-      path        = ""
       role_arn    = module.gcp_sts_role.arn
     }
 
     gcs_data_sink = {
       bucket_name = module.destination_bucket.bucket_name
-    }
-
-    object_conditions = {
-      min_time_elapsed_since_last_modification = "120s"
     }
 
     transfer_options = {
@@ -611,19 +635,15 @@ module "storage_transfer_s3_event_stream" {
     google_pubsub_topic_iam_member.notification_config,
     module.aws_source_bucket,
     module.s3_event_queue,
-    module.gcp_sts_role
+    module.gcp_sts_role,
+    google_project_iam_member.sts_token_creator,
+    time_sleep.wait_for_aws_role_propagation
   ]
 }
 
 # -------------------------------------------------------------------------------
 # 6. Azure Blob Storage to GCS Event-Driven Stream Transfer
 # -------------------------------------------------------------------------------
-resource "google_project_iam_member" "sts_token_creator" {
-  project = var.project_id
-  role    = "roles/iam.serviceAccountTokenCreator"
-  member  = "serviceAccount:${data.google_storage_transfer_project_service_account.default.email}"
-}
-
 data "azuread_client_config" "current" {}
 
 resource "azuread_application" "gcp_sts_app" {
