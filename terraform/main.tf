@@ -1,3 +1,8 @@
+data "google_compute_image" "ubuntu_2404" {
+  family  = "ubuntu-2404-lts-amd64"
+  project = "ubuntu-os-cloud"
+}
+
 # -------------------------------------------------------------------------------
 # Dynamic Timestamp Calculations
 # -------------------------------------------------------------------------------
@@ -313,6 +318,37 @@ module "storage_transfer_event_driven" {
 # -------------------------------------------------------------------------------
 # 4. Posix => GCS
 # -------------------------------------------------------------------------------
+module "posix_vpc" {
+  source                          = "./modules/gcp/vpc"
+  vpc_name                        = "posix-vpc"
+  delete_default_routes_on_create = false
+  auto_create_subnetworks         = false
+  routing_mode                    = "REGIONAL"
+  subnets = [
+    {
+      name                     = "posix-instance-subnet"
+      region                   = var.region
+      purpose                  = "PRIVATE"
+      role                     = "ACTIVE"
+      private_ip_google_access = true
+      ip_cidr_range            = "10.1.0.0/24"
+    }
+  ]
+  firewall_data = [
+    {
+      name          = "posix-vpc-firewall-ssh"
+      target_tags   = ["posix-instance"]
+      source_ranges = ["35.235.240.0/20"]
+      allow_list = [
+        {
+          protocol = "tcp"
+          ports    = ["22"]
+        }
+      ]
+    }
+  ]
+}
+
 resource "google_storage_transfer_agent_pool" "posix_agent_pool" {
   name         = "nfs-migration-pool"
   project      = var.project_id
@@ -330,6 +366,11 @@ resource "google_service_account" "transfer_agent_sa" {
   project      = var.project_id
 }
 
+# Key for POSIX agent container authentication
+resource "google_service_account_key" "transfer_agent_key" {
+  service_account_id = google_service_account.transfer_agent_sa.name
+}
+
 # Required role for agent container to authenticate with STS Agent Pool
 resource "google_project_iam_member" "agent_sa_transfer_agent" {
   project = var.project_id
@@ -344,27 +385,124 @@ resource "google_project_iam_member" "agent_sa_pubsub" {
   member  = "serviceAccount:${google_service_account.transfer_agent_sa.email}"
 }
 
-# IAM permissions for GCP STS Service Account on Destination Bucket
-resource "google_storage_bucket_iam_member" "destination_object_admin" {
-  bucket     = module.destination_bucket.bucket_name
-  role       = "roles/storage.objectAdmin"
-  member     = "serviceAccount:${data.google_storage_transfer_project_service_account.default.email}"
-  depends_on = [module.destination_bucket]
-}
+# Simulated POSIX instance
+module "posix_instance" {
+  source                    = "./modules/gcp/compute"
+  name                      = "consumer-instance"
+  machine_type              = "e2-micro"
+  zone                      = "asia-south1-a"
+  deletion_protection       = false
+  allow_stopping_for_update = true
 
-resource "google_pubsub_topic_iam_member" "notification_publisher" {
-  topic  = module.notification_topic.topic_name
-  role   = "roles/pubsub.publisher"
-  member = "serviceAccount:${data.google_storage_transfer_project_service_account.default.email}"
+  boot_disk = {
+    auto_delete = true
+    device_name = "boot-disk"
+    mode        = "READ_WRITE"
+    image       = data.google_compute_image.ubuntu_2404.self_link
+    size        = 10
+    type        = "pd-ssd"
+    labels = {
+      environment = "production"
+      team        = "platform-eng"
+      cost_center = "cc-1042"
+    }
+  }
+
+  network_interfaces = [
+    {
+      network        = module.posix_vpc.self_link
+      subnetwork     = module.posix_vpc.subnet_self_links["posix-instance-subnet"]
+      access_configs = [{ nat_ip = null }]
+    }
+  ]
+
+  service_account = {
+    email  = google_service_account.transfer_agent_sa.email
+    scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+  }
+
+  metadata_startup_script = <<-EOT
+    #!/bin/bash
+    set -euo pipefail
+
+    echo "=== [1/5] Setting up POSIX Source Directory Mapping ==="
+    # Create the root POSIX directory configured in transfer_spec.posix_data_source.root_directory
+    mkdir -p /mnt/nfs_share/data /mnt/nfs_share/reports /mnt/nfs_share/logs
+
+    # Populate sample files to test POSIX metadata preservation:
+    # MODE_PRESERVE, UID_NUMBER, GID_NUMBER, SYMLINK_PRESERVE, and native mtime preservation
+    echo "POSIX storage transfer sample document" > /mnt/nfs_share/data/sample1.txt
+    echo "POSIX confidential log payload" > /mnt/nfs_share/logs/audit.log
+    dd if=/dev/urandom of=/mnt/nfs_share/data/payload.bin bs=1M count=2 status=none
+
+    # Apply varied POSIX permissions
+    chmod 0644 /mnt/nfs_share/data/sample1.txt
+    chmod 0600 /mnt/nfs_share/logs/audit.log
+    chmod 0755 /mnt/nfs_share/data/payload.bin
+
+    # Create symlink to verify SYMLINK_PRESERVE
+    ln -sf /mnt/nfs_share/data/sample1.txt /mnt/nfs_share/data/sample1_link.txt
+
+    # Set historical timestamp to verify native mtime preservation
+    touch -t 202601011200.00 /mnt/nfs_share/data/sample1.txt
+
+    echo "=== [2/5] Installing Docker Container Runtime ==="
+    apt-get update -y
+    apt-get install -y docker.io ca-certificates curl jq
+
+    systemctl start docker
+    systemctl enable docker
+
+    echo "=== [3/5] Configuring Storage Transfer Service Agent Credentials ==="
+    mkdir -p /opt/google/sts
+    cat <<'CREDS_EOF' > /opt/google/sts/agent-creds.json
+    ${base64decode(google_service_account_key.transfer_agent_key.private_key)}
+    CREDS_EOF
+    chmod 600 /opt/google/sts/agent-creds.json
+
+    echo "=== [4/5] Launching Storage Transfer Service Agent Container ==="
+    # POSIX Directory Mapping:
+    # The host path /mnt/nfs_share is mounted to the exact same path /mnt/nfs_share inside the container
+    docker run -d \
+      --name sts-posix-agent \
+      --restart=always \
+      --network=host \
+      --ulimit memlock=64000000 \
+      -v /mnt/nfs_share:/mnt/nfs_share \
+      -v /opt/google/sts/agent-creds.json:/tmp/agent-creds.json:ro \
+      gcr.io/cloud-ingest/tsop-agent:latest \
+      --project-id=${var.project_id} \
+      --agent-pool=${google_storage_transfer_agent_pool.posix_agent_pool.name} \
+      --creds-file=/tmp/agent-creds.json \
+      --hostname=$(hostname)
+
+    echo "=== [5/5] POSIX Agent startup completed successfully ==="
+  EOT
+
+  labels = {
+    environment = "production"
+    team        = "platform-eng"
+    cost_center = "cc-1042"
+  }
+
+  tags = ["posix-instance"]
+
+  depends_on = [
+    google_storage_transfer_agent_pool.posix_agent_pool,
+    google_service_account_key.transfer_agent_key,
+    google_project_iam_member.agent_sa_transfer_agent,
+    google_project_iam_member.agent_sa_pubsub
+  ]
 }
 
 module "posix_to_gcs_transfer" {
   source      = "./modules/gcp/storage-transfer/posix-to-gcs"
+  name        = "transferJobs/OPI-posix-to-gcs-${var.project_id}"
   description = "Production POSIX/NFS share sync to GCS"
   status      = "ENABLED"
 
   transfer_spec = {
-    source_agent_pool_name = google_storage_transfer_agent_pool.posix_agent_pool.name
+    source_agent_pool_name = google_storage_transfer_agent_pool.posix_agent_pool.id
 
     # Source POSIX / Mounted NFS path on agent host
     posix_data_source = {
@@ -390,11 +528,10 @@ module "posix_to_gcs_transfer" {
       delete_objects_from_source_after_transfer  = false
 
       metadata_options = {
-        mode          = "MODE_PRESERVE"         # Preserve POSIX file permissions
-        gid           = "GID_NUMBER"            # Preserve POSIX group ID
-        uid           = "UID_NUMBER"            # Preserve POSIX user ID
-        symlink       = "SYMLINK_PRESERVE"      # Preserve symlinks
-        time_created  = "TIME_CREATED_PRESERVE" # Preserve original file creation timestamps
+        mode          = "MODE_PRESERVE"    # Preserve POSIX file permissions
+        gid           = "GID_NUMBER"       # Preserve POSIX group ID
+        uid           = "UID_NUMBER"       # Preserve POSIX user ID
+        symlink       = "SYMLINK_PRESERVE" # Preserve symlinks
         storage_class = "STORAGE_CLASS_DESTINATION_BUCKET_DEFAULT"
       }
     }
@@ -415,30 +552,12 @@ module "posix_to_gcs_transfer" {
     schedule_repeat_interval = "86400s" # Daily execution
   }]
 
-  # Detailed audit logs in Cloud Logging
+  # Detailed audit logs in Cloud Logging (FIND is not supported for agent-based transfers)
   logging_config = {
     enable_on_prem_gcs_transfer_logs = true
-    log_actions                      = ["FIND", "COPY", "DELETE"]
+    log_actions                      = ["COPY", "DELETE"]
     log_action_states                = ["SUCCEEDED", "FAILED"]
   }
-
-  # Pub/Sub alert notifications
-  notification_config = [
-    {
-      pubsub_topic = module.notification_topic.topic_id
-      event_types = [
-        "TRANSFER_OPERATION_SUCCESS",
-        "TRANSFER_OPERATION_FAILED",
-        "TRANSFER_OPERATION_ABORTED"
-      ]
-      payload_format = "JSON"
-    }
-  ]
-
-  depends_on = [
-    google_storage_bucket_iam_member.destination_object_admin,
-    google_pubsub_topic_iam_member.notification_publisher
-  ]
 }
 
 # -------------------------------------------------------------------------------
@@ -865,39 +984,54 @@ resource "google_project_service" "compute_api" {
   disable_on_destroy         = false
 }
 
-# resource "random_id" "ftp_bucket_suffix" {
-#   byte_length = 4
-# }
+# Dedicated Enterprise GCS Bucket for SFTP Ingestion & Distribution
+resource "random_id" "ftp_bucket_suffix" {
+  byte_length = 4
+}
 
-# resource "google_storage_bucket" "sftp_storage_bucket" {
-#   name                        = "sftp-exchange-${var.project_id}-${random_id.ftp_bucket_suffix.hex}"
-#   location                    = var.cloud_ftp_region
-#   project                     = var.project_id
-#   storage_class               = "STANDARD"
-#   uniform_bucket_level_access = true
-#   force_destroy               = true
+resource "google_storage_bucket" "sftp_storage_bucket" {
+  name                        = "sftp-exchange-${var.project_id}-${random_id.ftp_bucket_suffix.hex}"
+  location                    = var.cloud_ftp_region
+  project                     = var.project_id
+  storage_class               = "STANDARD"
+  uniform_bucket_level_access = true
+  force_destroy               = true
 
-#   versioning {
-#     enabled = true
-#   }
+  versioning {
+    enabled = true
+  }
 
-#   lifecycle_rule {
-#     action {
-#       type = "Delete"
-#     }
-#     condition {
-#       age        = 90
-#       with_state = "ARCHIVED"
-#     }
-#   }
+  lifecycle_rule {
+    action {
+      type = "Delete"
+    }
+    condition {
+      age        = 90
+      with_state = "ARCHIVED"
+    }
+  }
 
-#   labels = {
-#     environment = "production"
-#     service     = "cloud-ftp"
-#     managed_by  = "terraform"
-#   }
-# }
+  labels = {
+    environment = "production"
+    service     = "cloud-ftp"
+    managed_by  = "terraform"
+  }
+}
 
+# Pre-created standard subdirectories for inbound / outbound file exchange
+resource "google_storage_bucket_object" "inbound_folder" {
+  name    = "inbound/"
+  content = "SFTP inbound folder placeholder"
+  bucket  = google_storage_bucket.sftp_storage_bucket.name
+}
+
+resource "google_storage_bucket_object" "outbound_folder" {
+  name    = "outbound/"
+  content = "SFTP outbound folder placeholder"
+  bucket  = google_storage_bucket.sftp_storage_bucket.name
+}
+
+# Dedicated Customer Service Account (Least-Privilege User Identity)
 resource "google_service_account" "sftp_user_sa" {
   account_id   = "sftp-user-${var.cloud_ftp_username}"
   display_name = "Cloud FTP Managed User Identity for ${var.cloud_ftp_username}"
@@ -905,15 +1039,14 @@ resource "google_service_account" "sftp_user_sa" {
   project      = var.project_id
 }
 
-# resource "google_storage_bucket_iam_member" "sftp_sa_bucket_access" {
-#   bucket = google_storage_bucket.sftp_storage_bucket.name
-#   role   = "roles/storage.objectUser"
-#   member = "serviceAccount:${google_service_account.sftp_user_sa.email}"
-# }
+# Grant User Service Account scoped read/write access to SFTP bucket
+resource "google_storage_bucket_iam_member" "sftp_sa_bucket_access" {
+  bucket = google_storage_bucket.sftp_storage_bucket.name
+  role   = "roles/storage.objectUser"
+  member = "serviceAccount:${google_service_account.sftp_user_sa.email}"
+}
 
-# -------------------------------------------------------------------------------
-# 4. Cloud FTP Service Agent Identity & Token Creator IAM Binding
-# -------------------------------------------------------------------------------
+# Cloud FTP Service Agent Identity & IAM Delegation (Token Creator)
 resource "google_project_service_identity" "ftp_service_agent" {
   provider = google-beta
   project  = var.project_id
@@ -928,6 +1061,7 @@ resource "google_service_account_iam_member" "ftp_service_agent_token_creator" {
   member             = "serviceAccount:${google_project_service_identity.ftp_service_agent.email}"
 }
 
+# OpenSSH Key Pair Generation (if external public key not provided)
 resource "tls_private_key" "sftp_client_key" {
   count     = var.cloud_ftp_user_ssh_public_key == "" ? 1 : 0
   algorithm = "RSA"
@@ -940,6 +1074,7 @@ locals {
   )
 }
 
+# VPC Network & Subnet for INTERNAL Private Service Connect Connectivity
 module "sftp_vpc" {
   source                          = "./modules/gcp/vpc"
   vpc_name                        = "sftp-psc-vpc"
@@ -955,21 +1090,23 @@ module "sftp_vpc" {
     }
   ]
   firewall_data = []
-}
 
+  depends_on = [google_project_service.compute_api]
+}
 
 # Reserved internal IP for Private Service Connect Endpoint
 resource "google_compute_address" "sftp_psc_internal_ip" {
   count        = var.cloud_ftp_access_type == "INTERNAL" ? 1 : 0
   name         = "sftp-psc-internal-ip"
-  subnetwork   = google_compute_subnetwork.sftp_subnet.id
+  subnetwork   = module.sftp_vpc.subnet_ids["sftp-psc-subnet"]
   address_type = "INTERNAL"
   region       = var.cloud_ftp_region
   project      = var.project_id
 }
 
+# Google Cloud Managed SFTP Server
 resource "google_storage_ftp_server" "sftp_server" {
-  name         = var.cloud_ftp_server_name
+  server_id    = var.cloud_ftp_server_name
   location     = var.cloud_ftp_region
   project      = var.project_id
   display_name = "Production Managed SFTP Server"
@@ -985,10 +1122,9 @@ resource "google_storage_ftp_server" "sftp_server" {
   dynamic "internal_config" {
     for_each = var.cloud_ftp_access_type == "INTERNAL" ? [1] : []
     content {
-      # Consumer projects allowed to connect via Private Service Connect
       consumer_accept_list {
-        project_id_or_num = var.project_id
-        connection_limit  = 10
+        project          = "projects/${var.project_id}"
+        connection_limit = 10
       }
     }
   }
@@ -1006,31 +1142,37 @@ resource "google_storage_ftp_server" "sftp_server" {
   ]
 }
 
+# Private Service Connect Forwarding Rule (for INTERNAL access mode)
 resource "google_compute_forwarding_rule" "sftp_psc_endpoint" {
   count                 = var.cloud_ftp_access_type == "INTERNAL" ? 1 : 0
   name                  = "sftp-psc-forwarding-rule"
   region                = var.cloud_ftp_region
   project               = var.project_id
-  network               = google_compute_network.sftp_vpc.id
-  subnetwork            = google_compute_subnetwork.sftp_subnet.id
+  network               = module.sftp_vpc.vpc_id
+  subnetwork            = module.sftp_vpc.subnet_ids["sftp-psc-subnet"]
   ip_address            = google_compute_address.sftp_psc_internal_ip[0].id
-  target                = google_storage_ftp_server.sftp_server.internal_config[0].service_attachment
+  target                = try(google_storage_ftp_server.sftp_server.internal_config[0].service_attachment, null)
   load_balancing_scheme = ""
 }
 
+# Google Cloud Managed SFTP User Mapping
 resource "google_storage_ftp_user" "sftp_user" {
-  provider = google-beta
-  server   = google_storage_ftp_server.sftp_server.name
-  username = var.cloud_ftp_username
-  project  = var.project_id
+  server_id                = google_storage_ftp_server.sftp_server.server_id
+  user_id                  = var.cloud_ftp_username
+  location                 = var.cloud_ftp_region
+  project                  = var.project_id
+  customer_service_account = google_service_account.sftp_user_sa.email
 
   user_credentials {
-    ssh_public_key = local.effective_ssh_public_key
+    credential_name     = "ssh-key-1"
+    credential_type     = "SSH_PUBLIC_KEY"
+    ssh_public_key_body = local.effective_ssh_public_key
   }
 
   storage_directory_mappings {
-    bucket    = module.source_bucket.bucket_name
-    directory = "/"
+    bucket     = google_storage_bucket.sftp_storage_bucket.name
+    directory  = "/"
+    permission = "READ_WRITE"
   }
 
   labels = {
@@ -1046,6 +1188,7 @@ resource "google_storage_ftp_user" "sftp_user" {
   ]
 }
 
+# Cloud Audit Logging for SFTP Data Access
 resource "google_project_iam_audit_config" "ftp_audit_logs" {
   project = var.project_id
   service = "ftp.googleapis.com"
