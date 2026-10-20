@@ -19,7 +19,7 @@ output "cloud_ftp_server_ip_or_attachment" {
 
 output "cloud_ftp_storage_bucket" {
   description = "Target Google Cloud Storage bucket linked to the SFTP server"
-  value       = google_storage_bucket.sftp_storage_bucket.name
+  value       = module.sftp_storage_bucket.bucket_name
 }
 
 output "cloud_ftp_username" {

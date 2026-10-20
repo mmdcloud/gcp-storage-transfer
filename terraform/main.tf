@@ -968,7 +968,7 @@ module "storage_transfer_azure_event_stream" {
 }
 
 # -------------------------------------------------------------------------------
-# 7. Cloud FTP
+# 7. Cloud FTP (Managed SFTP on Google Cloud)
 # -------------------------------------------------------------------------------
 resource "google_project_service" "ftp_api" {
   project                    = var.project_id
@@ -989,46 +989,43 @@ resource "random_id" "ftp_bucket_suffix" {
   byte_length = 4
 }
 
-resource "google_storage_bucket" "sftp_storage_bucket" {
-  name                        = "sftp-exchange-${var.project_id}-${random_id.ftp_bucket_suffix.hex}"
-  location                    = var.cloud_ftp_region
-  project                     = var.project_id
+module "sftp_storage_bucket" {
+  source = "./modules/gcp/gcs"
+
+  project_id = var.project_id # used by the module for HMAC keys only
+  name       = "sftp-exchange-${var.project_id}-${random_id.ftp_bucket_suffix.hex}"
+  location   = var.cloud_ftp_region
+
   storage_class               = "STANDARD"
   uniform_bucket_level_access = true
   force_destroy               = true
+  versioning                  = true
 
-  versioning {
-    enabled = true
-  }
-
-  lifecycle_rule {
-    action {
-      type = "Delete"
+  lifecycle_rules = [
+    {
+      action = {
+        type = "Delete"
+      }
+      condition = {
+        age        = 90
+        with_state = "ARCHIVED"
+      }
     }
-    condition {
-      age        = 90
-      with_state = "ARCHIVED"
+  ]
+
+  # Pre-created subdirectories for inbound / outbound file exchange
+  contents = [
+    {
+      name        = "inbound/"
+      content     = "SFTP inbound folder placeholder"
+      source_path = ""
+    },
+    {
+      name        = "outbound/"
+      content     = "SFTP outbound folder placeholder"
+      source_path = ""
     }
-  }
-
-  labels = {
-    environment = "production"
-    service     = "cloud-ftp"
-    managed_by  = "terraform"
-  }
-}
-
-# Pre-created standard subdirectories for inbound / outbound file exchange
-resource "google_storage_bucket_object" "inbound_folder" {
-  name    = "inbound/"
-  content = "SFTP inbound folder placeholder"
-  bucket  = google_storage_bucket.sftp_storage_bucket.name
-}
-
-resource "google_storage_bucket_object" "outbound_folder" {
-  name    = "outbound/"
-  content = "SFTP outbound folder placeholder"
-  bucket  = google_storage_bucket.sftp_storage_bucket.name
+  ]
 }
 
 # Dedicated Customer Service Account (Least-Privilege User Identity)
@@ -1041,24 +1038,9 @@ resource "google_service_account" "sftp_user_sa" {
 
 # Grant User Service Account scoped read/write access to SFTP bucket
 resource "google_storage_bucket_iam_member" "sftp_sa_bucket_access" {
-  bucket = google_storage_bucket.sftp_storage_bucket.name
+  bucket = module.sftp_storage_bucket.bucket_name
   role   = "roles/storage.objectUser"
   member = "serviceAccount:${google_service_account.sftp_user_sa.email}"
-}
-
-# Cloud FTP Service Agent Identity & IAM Delegation (Token Creator)
-resource "google_project_service_identity" "ftp_service_agent" {
-  provider = google-beta
-  project  = var.project_id
-  service  = "ftp.googleapis.com"
-
-  depends_on = [google_project_service.ftp_api]
-}
-
-resource "google_service_account_iam_member" "ftp_service_agent_token_creator" {
-  service_account_id = google_service_account.sftp_user_sa.name
-  role               = "roles/iam.serviceAccountTokenCreator"
-  member             = "serviceAccount:${google_project_service_identity.ftp_service_agent.email}"
 }
 
 # OpenSSH Key Pair Generation (if external public key not provided)
@@ -1136,9 +1118,7 @@ resource "google_storage_ftp_server" "sftp_server" {
   }
 
   depends_on = [
-    google_project_service.ftp_api,
-    google_project_service_identity.ftp_service_agent,
-    google_service_account_iam_member.ftp_service_agent_token_creator
+    google_project_service.ftp_api
   ]
 }
 
@@ -1155,6 +1135,22 @@ resource "google_compute_forwarding_rule" "sftp_psc_endpoint" {
   load_balancing_scheme = ""
 }
 
+# Authorize Cloud FTP Service Agent to generate short-lived tokens for customer SA
+resource "google_service_account_iam_member" "ftp_service_agent_token_creator" {
+  service_account_id = google_service_account.sftp_user_sa.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${google_storage_ftp_server.sftp_server.service_agent}"
+}
+
+# Wait for IAM token creator propagation across GCP
+resource "time_sleep" "wait_for_ftp_service_agent_iam" {
+  create_duration = "30s"
+
+  depends_on = [
+    google_service_account_iam_member.ftp_service_agent_token_creator
+  ]
+}
+
 # Google Cloud Managed SFTP User Mapping
 resource "google_storage_ftp_user" "sftp_user" {
   server_id                = google_storage_ftp_server.sftp_server.server_id
@@ -1165,12 +1161,12 @@ resource "google_storage_ftp_user" "sftp_user" {
 
   user_credentials {
     credential_name     = "ssh-key-1"
-    credential_type     = "SSH_PUBLIC_KEY"
+    credential_type     = "PUBLIC_KEY"
     ssh_public_key_body = local.effective_ssh_public_key
   }
 
   storage_directory_mappings {
-    bucket     = google_storage_bucket.sftp_storage_bucket.name
+    bucket     = module.sftp_storage_bucket.bucket_name
     directory  = "/"
     permission = "READ_WRITE"
   }
@@ -1183,7 +1179,7 @@ resource "google_storage_ftp_user" "sftp_user" {
 
   depends_on = [
     google_storage_ftp_server.sftp_server,
-    google_service_account_iam_member.ftp_service_agent_token_creator,
+    time_sleep.wait_for_ftp_service_agent_iam,
     google_storage_bucket_iam_member.sftp_sa_bucket_access
   ]
 }

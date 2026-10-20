@@ -161,7 +161,7 @@ variable "schedule_end_offset_hours" {
 variable "cloud_ftp_region" {
   description = "Region for Cloud FTP resources (e.g. us-central1, europe-west1)."
   type        = string
-  default     = "us-central1"
+  default     = "asia-south1"
 }
 
 variable "cloud_ftp_server_name" {
